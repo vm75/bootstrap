@@ -1,0 +1,495 @@
+#!/usr/bin/env bash
+
+# log
+LOG_FILE=install.log
+
+SCRIPTNAME=install-unattend
+SCRIPTURL=https://raw.githubusercontent.com/vm75/bootstrap/main/setup-arch?random=${RANDOM}
+
+# defaults
+COUNTRIES=US                  # -c
+TIMEZONE=America/Los_Angeles  # -t
+LTS=                          # -L
+LOCALE=en_US.UTF-8            # -l
+KEYMAP=us                     # -k
+HOSTNAME=server               # -n
+USERNAME=admin                # -u
+PASSWORD=admin                # -p
+SSH_KEY=                      # -s
+BIOS_BOOTLOADER=              # -b
+USER_UID=1000
+USER_GID=1000
+
+error() {
+  local msg=${1}
+  echo -e "\e[31m${SCRIPTNAME}: $1\e[0m"
+  exit -1
+}
+
+checkError() {
+  if [[ $? -ne 0 ]] ; then
+    error "Error while $1"
+  fi
+}
+
+usage() {
+  echo "usage: ${SCRIPTNAME} -d <device> [options...]"
+  echo "  options:"
+  echo "    -e <alternate efi partition>"
+  echo "    -c <mirror countries=US>"
+  echo "    -t <timezone=America/Los_Angeles>"
+  echo "    -l <locale=en_US.UTF-8>"
+  echo "    -k <keymap=us>"
+  echo "    -n <hostname=server[.domain]>"
+  echo "    -u <username=admin>"
+  echo "    -p <password=admin>"
+  echo "    -s <public sshkey>"
+  echo "    -f <directory containing user files>"
+  echo "    -w <wifi SSID>:<password>"
+  echo "    -b                                # use BIOS bootloader"
+  echo "    -L                                # use LTS"
+
+  exit 0
+}
+
+gen_wifi_auth() {
+  local ssid=$1
+  local key=$2
+
+  if [[ -z ${ssid} || -z ${key} ]] ; then
+    error "No valid ssid/key pair"
+  fi
+
+  local psk=$(wpa_passphrase "${ssid}" "${key}" | grep -e "\spsk" | cut -d= -f2)
+  echo -e "[Security]\nPreSharedKey=${psk}" | tee "${3:-/var/lib/iwd/${ssid}.psk}"
+}
+
+init_wifi() {
+  ssid=$(echo $0 | cut -d: -f1)
+  key=$(echo $0 | cut -d: -f2-)
+  wlint=$(ip a | grep " wl" | grep CAST | sed 's/.* \(wl\w\+\):.*/\1/')
+  if [[ $wlint != "" ]] ; then
+    gen_wifi_auth ${ssid} "${key}"
+    if [[ ! -z ${ssid} ]] ; then
+      iwctl station wlan0 connect ${ssid}
+      if [[ $? -ne 0 ]] ; then
+        return
+      fi
+
+      echo "Waiting 10 secs..."
+      sleep 10
+    fi
+  fi
+}
+
+init_os() {
+  # update
+  pacman -Syy --noconfirm
+  pacman -Sy --noconfirm --needed reflector archlinux-keyring
+  checkError "initializing pacman"
+
+  # set mirrors
+  echo "Setting up reflectors..."
+  if [[ ! -f /etc/pacman.d/mirrorlist ]] ; then
+    reflector -c "${COUNTRIES}" -f 12 -l 10 -n 12 --save /etc/pacman.d/mirrorlist
+    checkError "setting reflectors"
+  fi
+
+  # set date-time
+  setup_datetime
+}
+
+setup_drive() {
+  dev=$1
+
+  if [[ ${BIOS_BOOTLOADER} == -b ]] ; then
+    # create partition
+    (
+    echo g      # Create a new empty GPT partition table
+    echo n      # Add a new partition
+    echo        # Auto-select partition number
+    echo        # Auto-select partition start
+    echo +1M    # Partition Size
+    echo t      # Change type
+    echo 4      # BIOS boot partition
+    echo        # Auto-select partition
+    echo n      # Add a new partition
+    echo        # Auto-select partition number
+    echo        # Auto-select partition start
+    echo        # Auto-select partition end
+
+    echo w      # Write changes
+    ) | fdisk -W always ${dev}
+  else
+    # create partition
+    (
+    echo g      # Create a new empty GPT partition table
+    echo n      # Add a new partition
+    echo        # Auto-select partition number
+    echo        # Auto-select partition start
+    echo +512M  # Partition Size
+    echo t      # Change type
+    echo 1      # EFI parttion
+    echo        # Auto-select partition
+    echo n      # Add a new partition
+    echo        # Auto-select partition number
+    echo        # Auto-select partition start
+    echo        # Auto-select partition end
+
+    echo w      # Write changes
+    ) | fdisk -W always ${dev}
+  fi
+
+  checkError "partitioning ${dev}"
+
+  if [[ -b ${DRIVE}1 && -b ${DRIVE}2 ]] ; then
+    export BOOT_PART=${DRIVE}1
+    export ROOT_PART=${DRIVE}2
+  elif [[ -b ${DRIVE}p1 && -b ${DRIVE}p2 ]] ; then
+    export BOOT_PART=${DRIVE}p1
+    export ROOT_PART=${DRIVE}p2
+  else
+    error "Error detecting partitions"
+  fi
+
+  # format partitions
+  if [[ ${BIOS_BOOTLOADER} != -b ]] ; then
+    mkfs.fat -F32 ${BOOT_PART}
+    checkError "formatting ${BOOT_PART}"
+  fi
+  mkfs.ext4 -m 0 ${ROOT_PART}
+  checkError "formatting ${ROOT_PART}"
+}
+
+setup_datetime() {
+  hwclock --systohc
+  # timedatectl set-ntp true
+  systemctl enable systemd-timesyncd.service
+  checkError "enabling systemd-timesyncd"
+
+  if [[ ${MODE} == post-pacstrap ]] ; then
+    # timedatectl set-timezone ${TIMEZONE}
+    # checkError "setting timezone"
+    ln -s /usr/share/zoneinfo/${TIMEZONE} /etc/localtime
+  fi
+}
+
+setup_language() {
+  export LANG=${LOCALE}
+  echo LANG=${LOCALE} > /etc/locale.conf
+  sed -e "s/^#${LOCALE}/${LOCALE}/" -i /etc/locale.gen
+  locale-gen
+
+  # keymap
+  echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
+}
+
+setup_hostname() {
+  local host
+  if [[ ${HOSTNAME} =~ "." ]] ; then
+    host=$(echo ${HOSTNAME} | cut -d. -f1)
+  fi
+  echo ${HOSTNAME} > /etc/hostname
+  echo "127.0.0.1 localhost" > /etc/hosts
+  echo "::1 localhost" >> /etc/hosts
+  echo "127.0.1.1 ${HOSTNAME} ${host}" >> /etc/hosts
+}
+
+setup_user() {
+  # create user
+  groupadd -g ${USER_UID} ${USERNAME}
+  useradd -u ${USER_GID} -g ${USERNAME} -G wheel,audio -s /usr/bin/bash ${USERNAME}
+  echo "${USERNAME}:${PASSWORD}" | chpasswd
+
+  # sudo
+  sudo sed -e '0,/#*\s*%wheel/s//%wheel/' -i /etc/sudoers
+  mkdir -p /etc/sudoers.d
+  echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/${USERNAME}
+}
+
+setup_network() {
+  echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/30-ipforward.conf
+  echo -e "[Match]\nName=en*\n[Network]\nDHCP=yes" > /etc/systemd/network/20-wired.network
+  chmod 755 /etc/systemd/network/20-wired.network
+
+  systemctl enable systemd-networkd.service
+  systemctl enable systemd-resolved.service
+
+  # enable network configuration
+  systemctl enable iwd
+  mkdir -p /etc/iwd
+  echo -e "[General]\nEnableNetworkConfiguration=true" > /etc/iwd/main.conf
+}
+
+install_from_git() {
+  aur=$1
+  cd /tmp/aur
+  rm -rf "$aur"
+  git clone https://aur.archlinux.org/${aur}.git
+  if [[ $? -ne 0 ]] ; then
+    return
+  fi
+  cd "$aur"
+  makepkg -si --noconfirm
+}
+
+install_from_pkg() {
+  aur=$(basename ${1/.pkgbuild/})
+  dir="/tmp/aur/${aur}"
+  rm -rf "${dir}"
+  mkdir "${dir}"
+  cp ${1} "${dir}/PKGBUILD"
+  cd "${dir}"
+  makepkg -si --noconfirm
+}
+
+install_aur() {
+  mkdir -p /tmp/aur
+
+  for aur in $@ ; do
+    if [[ "$aur" =~ .pkgbuild$ ]] ; then
+      install_from_pkg $aur
+    else
+      install_from_git $aur
+    fi
+  done
+}
+
+setup_apps() {
+  # swap
+  systemctl enable systemd-swap
+
+  # crontab
+  systemctl enable cronie
+
+  # vi
+  rm /usr/bin/vi 2> /dev/null
+  ln -s /usr/bin/vim /usr/bin/vi
+
+  # sshd
+  systemctl enable sshd.service
+
+  # ssh keygen
+  if [[ ! -f ~/.ssh/id_rsa ]] ; then
+    ssh-keygen -q -t rsa -N '' -f ~/.ssh/id_rsa <<<y >/dev/null 2>&1
+  fi
+
+  # key for aur
+  gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
+
+  # setup user-apps
+  su - ${USERNAME} -c "/install-unattend -U"
+
+  # aur services
+  systemctl enable rc-local.service
+}
+
+setup_user_apps() {
+  # install aur
+  install_aur udevil rc-local
+}
+
+setup_bootloader() {
+  # grub setup
+  if [[ ${BIOS_BOOTLOADER} == -b ]] ; then
+    grub-install --target=i386-pc ${DRIVE}
+  else
+    grub-install --target=x86_64-efi --bootloader-id=GRUB --efi-directory=/boot
+  fi
+  grub-mkconfig -o /boot/grub/grub.cfg
+}
+
+bootstrap() {
+  init_os
+
+  # partition and format target drive
+  setup_drive ${DRIVE}
+
+  # mount partitions
+  mkdir -p /mnt
+  mount ${ROOT_PART} /mnt
+  if [[ ${BIOS_BOOTLOADER} != -b ]] ; then
+    mkdir -p /mnt/boot
+    mount ${EFI_PART:-${BOOT_PART}} /mnt/boot
+  fi
+
+  # install to drive
+  packages="base linux${LTS} linux${LTS}-headers linux-firmware reflector pacman-contrib archlinux-keyring \
+            systemd-swap grub efibootmgr rsync openssh dos2unix dosfstools lsof file bash-completion p7zip zip unzip \
+            htop sudo cpulimit lm_sensors cronie screen time alsa-utils \
+            networkmanager openresolv iwd inetutils nfs-utils cifs-utils ntfs-3g wget \
+            base-devel vim git man"
+  pacstrap /mnt $packages
+
+  # copy wi-fi
+  if [[ $(ls /var/lib/iwd/*.psk 2> /dev/null) ]] ; then
+    mkdir -p /mnt/var/lib/iwd
+    chmod 700 /mnt/var/lib/iwd
+    cp -a /var/lib/iwd/*.psk /mnt/var/lib/iwd/
+  fi
+
+  # generate fstab
+  genfstab -U /mnt >> /mnt/etc/fstab
+
+  # user files
+  USER_HOME=/mnt/home/${USERNAME}
+  cp -r /mnt/etc/skel ${USER_HOME}
+  if [[ -d ${USER_FILES} ]] ; then
+    cp -ar "${USER_FILES}/." ${USER_HOME}
+  elif [[ -f ${USER_FILES} ]] ; then
+    cd ${USER_HOME}
+    case "${USER_FILES}" in
+      *.tar)
+        tar xf "${USER_FILES}"
+        ;;
+      *.tar.gz|*.tgz)
+        tar xzf "${USER_FILES}"
+        ;;
+      *.tar.bz2|*.tbz)
+        tar xjf "${USER_FILES}"
+        ;;
+      *.tar.xz|*.txz)
+        tar xJf "${USER_FILES}"
+        ;;
+      *)
+        cp "${USER_FILES}" .
+        ;;
+    esac
+    cd -
+  fi
+
+  # ssh-keys
+  if [[ ! -z ${SSH_KEY} ]] ; then
+    mkdir -p ${USER_HOME}/.ssh
+    echo "${SSH_KEY}" >> ${USER_HOME}/.ssh/authorized_keys
+  fi
+
+  # ownership and permission
+  chmod 700 ${USER_HOME}/.ssh
+  chmod 600 ${USER_HOME}/.ssh/authorized_keys
+  chown -R ${USER_UID}:${USER_GID} ${USER_HOME}
+
+  # setup and run post-pacstrap
+  cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+  curl -L ${SCRIPTURL} -o /mnt/install-unattend
+  chmod +x /mnt/install-unattend
+  arch-chroot /mnt /install-unattend -P -c "${COUNTRIES}" ${BIOS_BOOTLOADER} -n "${HOSTNAME}" -l "${LOCALE}" -k "${KEYMAP}" -t "${TIMEZONE}" -u "${USERNAME}" -p "${PASSWORD}"
+  rm /mnt/install-unattend
+
+  # unmount partitions
+  umount ${EFI_PART:-${BOOT_PART}} ${ROOT_PART} 2> /dev/null
+}
+
+main() {
+  if [[ ! -d /sys/firmware/efi ]] ; then
+    export BIOS_BOOTLOADER="-b"
+  fi
+
+  export MODE=bootstrap
+  while getopts "DLPUbc:d:e:f:hk:l:n:p:s:t:u:w:" option; do
+    case "${option}" in
+    D)
+      set -x
+      ;;
+    L)
+      export LTS="-lts"
+      ;;
+    P)
+      export MODE=post-pacstrap
+      ;;
+    U)
+      export MODE=user-apps
+      ;;
+    b)
+      export BIOS_BOOTLOADER="-b"
+      ;;
+    c)
+      export COUNTRIES=${OPTARG}
+      ;;
+    d)
+      if [[ -b /dev/${OPTARG} ]] ; then
+        export DRIVE="/dev/${OPTARG}"
+      elif [[ -b ${OPTARG} ]] ; then
+        export DRIVE=${OPTARG}
+      fi
+      ;;
+    e)
+      if [[ -b ${OPTARG} ]] ; then
+        EFI_PART=${OPTARG}
+      fi
+      ;;
+    f)
+      export USER_FILES=$(realpath "${OPTARG}")
+      ;;
+    h)
+      usage
+      exit
+      ;;
+    k)
+      export KEYMAP=${OPTARG}
+      ;;
+    l)
+      export LOCALE=${OPTARG}
+      ;;
+    n)
+      export HOSTNAME=${OPTARG}
+      ;;
+    p)
+      export PASSWORD=${OPTARG}
+      ;;
+    s)
+      export SSH_KEY=${OPTARG}
+      ;;
+    t)
+      if [[ -f "/usr/share/zoneinfo/${TIMEZONE}" ]] ; then
+        export TIMEZONE=${OPTARG}
+      fi
+      ;;
+    u)
+      export USERNAME=${OPTARG}
+      ;;
+    w)
+      init_wifi ${OPTARG}
+      ;;
+    esac
+  done
+  shift $((OPTIND-1))
+
+  if [[ ${MODE} != user-apps && -z ${DRIVE} ]] ; then
+    error "No valid drive found"
+  fi
+
+  case ${MODE} in
+  bootstrap)
+    exec > >(tee $LOG_FILE) 2>&1
+
+    bootstrap
+
+    echo
+    echo "Installed with these settings:"
+    echo "  ROOT PARTITION=${ROOT_PART}"
+    echo "  BOOT PARTITION=${EFI_PART:-${BOOT_PART}}"
+    echo "  TIMEZONE=${TIMEZONE}"
+    echo "  LOCALE=${LOCALE}"
+    echo "  KEYMAP=${KEYMAP}"
+    echo "  HOSTNAME=${HOSTNAME}"
+    echo "  USERNAME=${USERNAME}"
+    echo "  PASSWORD=${PASSWORD}"
+    echo "  MIRROR COUNTRIES=${COUNTRIES}"
+    ;;
+  post-pacstrap)
+    setup_datetime
+    setup_language
+    setup_hostname
+    setup_user
+    setup_network
+    setup_apps
+    setup_bootloader
+    ;;
+  user-apps)
+    setup_user_apps
+    ;;
+  esac
+}
+
+main "$@"

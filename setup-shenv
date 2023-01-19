@@ -1,0 +1,72 @@
+#!/usr/bin/env sh
+
+error() {
+  echo $1 > /dev/stderr
+  exit ${2:-1}
+}
+
+setup_ssh() {
+  if [ ! -f ~/.ssh/id_rsa.pub ] ; then
+    mkdir -p -m 700 ~/.ssh
+    if type -t dropbearkey > /dev/null ; then
+      dropbearkey -f ~/.ssh/id_rsa -t rsa -s 2048 | grep ssh-rsa > ~/.ssh/id_rsa.pub
+    else
+      ssh-keygen -q -t rsa -N '' -f ~/.ssh/id_rsa
+    fi
+
+    [ $? -ne 0 ] && error "Error creating rsa key." $?
+  fi
+
+  echo "Public ssh key: "
+  cat ~/.ssh/id_rsa.pub
+  read -p "Is this key updated on github (https://github.com/settings/ssh/new)? [y/n]: " yesno < /dev/tty
+  [ "${yesno}" != y -a "${yesno}" != yes ] && error "Update ssh key and try again."
+}
+
+setup_shenv() {
+  if [ -d ~/.local/share/shenv ] ; then
+    return
+  fi
+
+  read -s -p "Enter github token? " GITHUB_TOKEN < /dev/tty ; echo
+  mkdir -p ~/.local/share
+  cd ~/.local/share
+  git clone --recurse-submodules -c core.symlinks=true git@github.com:vm75/shenv.git
+  [ $? -ne 0 ] && error "Error cloning shenv repo." $?
+
+  ~/.local/share/shenv/bin/shenv -i -p ${GITHUB_TOKEN:-mytoken}
+}
+
+init_asuswrt() {
+  export ENTWARE_ROOT=$(ls -d /tmp/mnt/*/entware)
+  export HOME=${ENTWARE_ROOT}/home
+
+  opkg update
+  opkg upgrade
+  opkg install bash vim-full git git-http htop rsync dropbearconvert nginx coreutils-mktemp procps-ng-pkill
+
+  echo "dbclient -y -i ${HOME}/.ssh/id_rsa \$*" > ${HOME}/.gitssh.sh
+  chmod +x ${HOME}/.gitssh.sh
+  export GIT_SSH=${HOME}/.gitssh.sh
+
+  profileAdd=/jffs/configs/profile.add
+  echo -e '#!/usr/bin/env sh\n' > ${profileAdd}
+  echo -e "export HOME=${HOME}\ncd \${HOME}\n" >> ${profileAdd}
+  echo -e "# bash-start" >> ${profileAdd}
+  echo -e "[ -f /opt/bin/bash ] && exec /opt/bin/bash" >> ${profileAdd}
+  echo -e "# bash-end" >> ${profileAdd}
+
+  sed -e "s/started.'/started.' \&/" -i ${ENTWARE_ROOT}/etc/init.d/S80nginx
+}
+
+main() {
+  if [ $(uname -o) == ASUSWRT-Merlin ] ; then
+    init_asuswrt
+  fi
+
+  setup_ssh
+  setup_shenv
+  echo "All set!"
+}
+
+main "$@"
