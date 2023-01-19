@@ -43,7 +43,7 @@ init_asuswrt() {
 
   opkg update
   opkg upgrade
-  opkg install bash vim-full git git-http htop rsync dropbearconvert nginx coreutils-mktemp procps-ng-pkill
+  opkg install bash vim-full git git-http htop rsync dropbearconvert nginx coreutils-mktemp coreutils-stat procps-ng-pkill
 
   echo "dbclient -y -i ${HOME}/.ssh/id_rsa \$*" > ${HOME}/.gitssh.sh
   chmod +x ${HOME}/.gitssh.sh
