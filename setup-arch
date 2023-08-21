@@ -53,8 +53,8 @@ usage() {
 }
 
 gen_wifi_auth() {
-  local ssid=$1
-  local key=$2
+  ssid=$(echo ${WIFI_CONF} | cut -d: -f1)
+  key=$(echo ${WIFI_CONF} | cut -d: -f2-)
 
   if [[ -z ${ssid} || -z ${key} ]] ; then
     error "No valid ssid/key pair"
@@ -65,11 +65,9 @@ gen_wifi_auth() {
 }
 
 init_wifi() {
-  ssid=$(echo $0 | cut -d: -f1)
-  key=$(echo $0 | cut -d: -f2-)
   wlint=$(ip a | grep " wl" | grep CAST | sed 's/.* \(wl\w\+\):.*/\1/')
   if [[ $wlint != "" ]] ; then
-    gen_wifi_auth ${ssid} "${key}"
+    gen_wifi_auth
     if [[ ! -z ${ssid} ]] ; then
       iwctl station wlan0 connect ${ssid}
       if [[ $? -ne 0 ]] ; then
@@ -143,11 +141,11 @@ setup_drive() {
   checkError "partitioning ${dev}"
 
   if [[ -b ${DRIVE}1 && -b ${DRIVE}2 ]] ; then
-    export BOOT_PART=${DRIVE}1
-    export ROOT_PART=${DRIVE}2
+    BOOT_PART=${DRIVE}1
+    ROOT_PART=${DRIVE}2
   elif [[ -b ${DRIVE}p1 && -b ${DRIVE}p2 ]] ; then
-    export BOOT_PART=${DRIVE}p1
-    export ROOT_PART=${DRIVE}p2
+    BOOT_PART=${DRIVE}p1
+    ROOT_PART=${DRIVE}p2
   else
     error "Error detecting partitions"
   fi
@@ -208,17 +206,32 @@ setup_user() {
 }
 
 setup_network() {
+  # setup ip forward
   echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/30-ipforward.conf
-  echo -e "[Match]\nName=en*\n[Network]\nDHCP=yes" > /etc/systemd/network/20-wired.network
+
+  # setup wired
+  echo -e "[Match]\nName=en*\n\n" > /etc/systemd/network/20-wired.network
+  if [[ -z ${IP} ]] ; then
+    echo -e "[Network]\nDHCP=yes" >> /etc/systemd/network/20-wired.network
+  else
+    Address=${IP}/24
+    Gateway=$(ip route | grep via | cut -d' ' -f 3 | uniq)
+    DNS=${Gateway}
+    echo -e "[Network]\nAddress=${Address}\nGateway=${Gateway}\nDNS=${Gateway}" >> /etc/systemd/network/20-wired.network
+  fi
   chmod 755 /etc/systemd/network/20-wired.network
 
-  systemctl enable systemd-networkd.service
-  systemctl enable systemd-resolved.service
-
-  # enable network configuration
+  # setup wifi
+  gen_wifi_auth
   systemctl enable iwd
   mkdir -p /etc/iwd
   echo -e "[General]\nEnableNetworkConfiguration=true" > /etc/iwd/main.conf
+  echo -e "[Match]\nName=en*\n\n[Network]\nDHCP=yes" > /etc/systemd/network/25-wireless.network
+  chmod 755 /etc/systemd/network/25-wireless.network
+
+  # enable network services
+  systemctl enable systemd-networkd.service
+  systemctl enable systemd-resolved.service
 }
 
 install_from_git() {
@@ -300,6 +313,10 @@ setup_bootloader() {
 }
 
 bootstrap() {
+  if [[ -n ${WIFI_CONF} ]] ; then
+    init_wifi
+  fi
+
   init_os
 
   # partition and format target drive
@@ -371,9 +388,13 @@ bootstrap() {
 
   # setup and run post-pacstrap
   cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
-  curl -L ${SCRIPTURL} -o /mnt/install-unattend
+  if [[ -z ${BASH_SOURCE} ]] ; then
+    curl -L ${SCRIPTURL} -o /mnt/install-unattend
+  else
+    cp ${BASH_SOURCE} -o /mnt/install-unattend
+  fi
   chmod +x /mnt/install-unattend
-  arch-chroot /mnt /install-unattend -P -c "${COUNTRIES}" ${BIOS_BOOTLOADER} -n "${HOSTNAME}" -l "${LOCALE}" -k "${KEYMAP}" -t "${TIMEZONE}" -u "${USERNAME}" -p "${PASSWORD}"
+  arch-chroot /mnt /install-unattend -P ${BIOS_BOOTLOADER} ${ARGS}
   rm /mnt/install-unattend
 
   # unmount partitions
@@ -382,35 +403,37 @@ bootstrap() {
 
 main() {
   if [[ ! -d /sys/firmware/efi ]] ; then
-    export BIOS_BOOTLOADER="-b"
+    BIOS_BOOTLOADER="-b"
   fi
 
-  export MODE=bootstrap
-  while getopts "DLPUbc:d:e:f:hk:l:n:p:s:t:u:w:" option; do
+  MODE=bootstrap
+  ARGS=
+  while getopts "DLPUbc:d:e:f:hi:k:l:n:p:s:t:u:w:" option; do
     case "${option}" in
     D)
       set -x
       ;;
     L)
-      export LTS="-lts"
+      LTS="-lts"
       ;;
     P)
-      export MODE=post-pacstrap
+      MODE=post-pacstrap
       ;;
     U)
-      export MODE=user-apps
+      MODE=user-apps
       ;;
     b)
-      export BIOS_BOOTLOADER="-b"
+      BIOS_BOOTLOADER="-b"
       ;;
     c)
-      export COUNTRIES=${OPTARG}
+      COUNTRIES=${OPTARG}
+      ARGS="${ARGS} -c ${COUNTRIES}"
       ;;
     d)
       if [[ -b /dev/${OPTARG} ]] ; then
-        export DRIVE="/dev/${OPTARG}"
+        DRIVE="/dev/${OPTARG}"
       elif [[ -b ${OPTARG} ]] ; then
-        export DRIVE=${OPTARG}
+        DRIVE=${OPTARG}
       fi
       ;;
     e)
@@ -419,37 +442,49 @@ main() {
       fi
       ;;
     f)
-      export USER_FILES=$(realpath "${OPTARG}")
+      USER_FILES=$(realpath "${OPTARG}")
       ;;
     h)
       usage
       exit
       ;;
+    i)
+      IP=${OPTARG}
+      ARGS="${ARGS} -i ${IP}"
+      ;;
     k)
-      export KEYMAP=${OPTARG}
+      KEYMAP=${OPTARG}
+      ARGS="${ARGS} -k ${KEYMAP}"
       ;;
     l)
-      export LOCALE=${OPTARG}
+      LOCALE=${OPTARG}
+      ARGS="${ARGS} -l ${LOCALE}"
       ;;
     n)
-      export HOSTNAME=${OPTARG}
+      HOSTNAME=${OPTARG}
+      ARGS="${ARGS} -n ${HOSTNAME}"
       ;;
     p)
-      export PASSWORD=${OPTARG}
+      PASSWORD=${OPTARG}
+      ARGS="${ARGS} -p ${PASSWORD}"
       ;;
     s)
-      export SSH_KEY=${OPTARG}
+      SSH_KEY=${OPTARG}
+      ARGS="${ARGS} -s ${SSH_KEY}"
       ;;
     t)
       if [[ -f "/usr/share/zoneinfo/${TIMEZONE}" ]] ; then
-        export TIMEZONE=${OPTARG}
+        TIMEZONE=${OPTARG}
+        ARGS="${ARGS} -t ${TIMEZONE}"
       fi
       ;;
     u)
-      export USERNAME=${OPTARG}
+      USERNAME=${OPTARG}
+      ARGS="${ARGS} -u ${USERNAME}"
       ;;
     w)
-      init_wifi ${OPTARG}
+      WIFI_CONF=${OPTARG}
+      ARGS="${ARGS} -w ${WIFI_CONF}"
       ;;
     esac
   done
