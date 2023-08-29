@@ -3,7 +3,7 @@
 # log
 LOG_FILE=install.log
 
-SCRIPTNAME=install-unattend
+SCRIPTNAME=setup-arch
 SCRIPTURL=https://raw.githubusercontent.com/vm75/bootstrap/main/setup-arch?random=${RANDOM}
 
 # defaults
@@ -291,7 +291,7 @@ setup_apps() {
   gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
 
   # setup user-apps
-  su - ${USERNAME} -c "/install-unattend -U"
+  su - ${USERNAME} -c "/${SCRIPTNAME} -U"
 
   # aur services
   systemctl enable rc-local.service
@@ -389,13 +389,13 @@ bootstrap() {
   # setup and run post-pacstrap
   cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
   if [[ -z ${BASH_SOURCE} ]] ; then
-    curl -L ${SCRIPTURL} -o /mnt/install-unattend
+    curl -L ${SCRIPTURL} -o /mnt/${SCRIPTNAME}
   else
-    cp ${BASH_SOURCE} -o /mnt/install-unattend
+    cp ${BASH_SOURCE} -o /mnt/${SCRIPTNAME}
   fi
-  chmod +x /mnt/install-unattend
-  arch-chroot /mnt /install-unattend -P ${BIOS_BOOTLOADER} ${ARGS}
-  rm /mnt/install-unattend
+  chmod +x /mnt/${SCRIPTNAME}
+  arch-chroot /mnt /${SCRIPTNAME} -P ${BIOS_BOOTLOADER} ${ARGS}
+  rm /mnt/${SCRIPTNAME}
 
   # unmount partitions
   umount ${EFI_PART:-${BOOT_PART}} ${ROOT_PART} 2> /dev/null
