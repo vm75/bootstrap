@@ -299,7 +299,7 @@ setup_apps() {
 
 setup_user_apps() {
   # install aur
-  install_aur udevil rc-local cpulimit
+  install_aur udevil rc-local cpulimit ntfsprogs-ntfs3
 }
 
 setup_bootloader() {
@@ -334,7 +334,7 @@ bootstrap() {
   packages="base linux${LTS} linux${LTS}-headers linux-firmware reflector pacman-contrib archlinux-keyring \
             systemd-swap grub efibootmgr rsync openssh dos2unix dosfstools lsof file bash-completion p7zip zip unzip \
             htop sudo lm_sensors cronie screen time alsa-utils \
-            networkmanager openresolv iwd inetutils nfs-utils cifs-utils ntfs-3g wget \
+            networkmanager openresolv iwd inetutils nfs-utils cifs-utils wget \
             base-devel vim git man"
   pacstrap /mnt $packages
 
