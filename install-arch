@@ -1,24 +1,14 @@
 #!/usr/bin/env bash
 
-# log
-LOG_FILE=install.log
+SCRIPTNAME=install-arch
+BOOTSTRAP_DIR=$(dirname "${BASH_SOURCE}")
 
-SCRIPTNAME=setup-arch
-SCRIPTURL=https://raw.githubusercontent.com/vm75/bootstrap/main/setup-arch?random=${RANDOM}
+# log
+LOG_FILE=~/${SCRIPTNAME}.log
+exec > >(tee $LOG_FILE) 2>&1
 
 # defaults
-COUNTRIES=US                  # -c
-TIMEZONE=America/Los_Angeles  # -t
-LTS=                          # -L
-LOCALE=en_US.UTF-8            # -l
-KEYMAP=us                     # -k
-HOSTNAME=server               # -n
-USERNAME=admin                # -u
-PASSWORD=admin                # -p
-SSH_KEY=                      # -s
-BIOS_BOOTLOADER=              # -b
-USER_UID=1000
-USER_GID=1000
+COUNTRIES=us,ca # -c
 
 error() {
   local msg=${1}
@@ -28,61 +18,25 @@ error() {
 
 checkError() {
   if [[ $? -ne 0 ]] ; then
-    error "Error while $1"
+    error "Failed $1"
   fi
 }
 
 usage() {
   echo "usage: ${SCRIPTNAME} -d <device> [options...]"
   echo "  options:"
-  echo "    -e <alternate efi partition>"
-  echo "    -c <mirror countries=US>"
-  echo "    -t <timezone=America/Los_Angeles>"
-  echo "    -l <locale=en_US.UTF-8>"
-  echo "    -k <keymap=us>"
   echo "    -n <hostname=server[.domain]>"
   echo "    -u <username=admin>"
   echo "    -p <password=admin>"
   echo "    -s <public sshkey>"
   echo "    -f <directory containing user files>"
   echo "    -w <wifi SSID>:<password>"
-  echo "    -b                                # use BIOS bootloader"
-  echo "    -L                                # use LTS"
 
   exit 0
 }
 
-gen_wifi_auth() {
-  ssid=$(echo ${WIFI_CONF} | cut -d: -f1)
-  key=$(echo ${WIFI_CONF} | cut -d: -f2-)
-
-  if [[ -z ${ssid} || -z ${key} ]] ; then
-    error "No valid ssid/key pair"
-  fi
-
-  local psk=$(wpa_passphrase "${ssid}" "${key}" | grep -e "\spsk" | cut -d= -f2)
-  echo -e "[Security]\nPreSharedKey=${psk}" | tee "${3:-/var/lib/iwd/${ssid}.psk}"
-}
-
-init_wifi() {
-  wlint=$(ip a | grep " wl" | grep CAST | sed 's/.* \(wl\w\+\):.*/\1/')
-  if [[ $wlint != "" ]] ; then
-    gen_wifi_auth
-    if [[ ! -z ${ssid} ]] ; then
-      iwctl station wlan0 connect ${ssid}
-      if [[ $? -ne 0 ]] ; then
-        return
-      fi
-
-      echo "Waiting 10 secs..."
-      sleep 10
-    fi
-  fi
-}
-
-init_os() {
+setup_mirrors() {
   # update
-  pacman -Syy --noconfirm
   pacman -Sy --noconfirm --needed reflector archlinux-keyring
   checkError "initializing pacman"
 
@@ -92,265 +46,95 @@ init_os() {
     reflector -c "${COUNTRIES}" -f 12 -l 10 -n 12 --save /etc/pacman.d/mirrorlist
     checkError "setting reflectors"
   fi
-
-  # set date-time
-  setup_datetime
 }
 
-setup_drive() {
-  dev=$1
-
-  if [[ ${BIOS_BOOTLOADER} == -b ]] ; then
-    # create partition
-    (
-    echo g      # Create a new empty GPT partition table
-    echo n      # Add a new partition
-    echo        # Auto-select partition number
-    echo        # Auto-select partition start
-    echo +1M    # Partition Size
-    echo t      # Change type
-    echo 4      # BIOS boot partition
-    echo        # Auto-select partition
-    echo n      # Add a new partition
-    echo        # Auto-select partition number
-    echo        # Auto-select partition start
-    echo        # Auto-select partition end
+parition_drive() {
+  # create partition
+  (
+    echo g   # Create a new empty GPT partition table
+    echo n   # Add a new partition
+    echo     # Auto-select partition number
+    echo     # Auto-select partition start
+    echo +1G # Partition Size
+    echo t   # Change type
+    echo 1   # EFI parttion
+    echo     # Auto-select partition
+    echo n   # Add a new partition
+    echo     # Auto-select partition number
+    echo     # Auto-select partition start
+    echo     # Auto-select partition end
 
     echo w      # Write changes
-    ) | fdisk -W always ${dev}
-  else
-    # create partition
-    (
-    echo g      # Create a new empty GPT partition table
-    echo n      # Add a new partition
-    echo        # Auto-select partition number
-    echo        # Auto-select partition start
-    echo +512M  # Partition Size
-    echo t      # Change type
-    echo 1      # EFI parttion
-    echo        # Auto-select partition
-    echo n      # Add a new partition
-    echo        # Auto-select partition number
-    echo        # Auto-select partition start
-    echo        # Auto-select partition end
+  ) | fdisk -W always ${DRIVE}
+  checkError "partitioning ${DRIVE}"
 
-    echo w      # Write changes
-    ) | fdisk -W always ${dev}
-  fi
-
-  checkError "partitioning ${dev}"
-
-  if [[ -b ${DRIVE}1 && -b ${DRIVE}2 ]] ; then
-    BOOT_PART=${DRIVE}1
-    ROOT_PART=${DRIVE}2
-  elif [[ -b ${DRIVE}p1 && -b ${DRIVE}p2 ]] ; then
-    BOOT_PART=${DRIVE}p1
-    ROOT_PART=${DRIVE}p2
-  else
-    error "Error detecting partitions"
-  fi
-
-  # format partitions
-  if [[ ${BIOS_BOOTLOADER} != -b ]] ; then
-    mkfs.fat -F32 ${BOOT_PART}
-    checkError "formatting ${BOOT_PART}"
-  fi
-  mkfs.ext4 -m 0 ${ROOT_PART}
-  checkError "formatting ${ROOT_PART}"
-}
-
-setup_datetime() {
-  hwclock --systohc
-  # timedatectl set-ntp true
-  systemctl enable systemd-timesyncd.service
-  checkError "enabling systemd-timesyncd"
-
-  if [[ ${MODE} == post-pacstrap ]] ; then
-    # timedatectl set-timezone ${TIMEZONE}
-    # checkError "setting timezone"
-    ln -s /usr/share/zoneinfo/${TIMEZONE} /etc/localtime
-  fi
-}
-
-setup_language() {
-  export LANG=${LOCALE}
-  echo LANG=${LOCALE} > /etc/locale.conf
-  sed -e "s/^#${LOCALE}/${LOCALE}/" -i /etc/locale.gen
-  locale-gen
-
-  # keymap
-  echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
-}
-
-setup_hostname() {
-  local host
-  if [[ ${HOSTNAME} =~ "." ]] ; then
-    host=$(echo ${HOSTNAME} | cut -d. -f1)
-  fi
-  echo ${HOSTNAME} > /etc/hostname
-  echo "127.0.0.1 localhost" > /etc/hosts
-  echo "::1 localhost" >> /etc/hosts
-  echo "127.0.1.1 ${HOSTNAME} ${host}" >> /etc/hosts
-}
-
-setup_user() {
-  # create user
-  groupadd -g ${USER_UID} ${USERNAME}
-  useradd -u ${USER_GID} -g ${USERNAME} -G wheel,audio -s /usr/bin/bash ${USERNAME}
-  echo "${USERNAME}:${PASSWORD}" | chpasswd
-
-  # sudo
-  sudo sed -e '0,/#*\s*%wheel/s//%wheel/' -i /etc/sudoers
-  mkdir -p /etc/sudoers.d
-  echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/${USERNAME}
-}
-
-setup_network() {
-  # setup ip forward
-  echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/30-ipforward.conf
-
-  # setup wired
-  echo -e "[Match]\nName=en*\n\n" > /etc/systemd/network/20-wired.network
-  if [[ -z ${IP} ]] ; then
-    echo -e "[Network]\nDHCP=yes" >> /etc/systemd/network/20-wired.network
-  else
-    Address=${IP}/24
-    Gateway=$(ip route | grep via | cut -d' ' -f 3 | uniq)
-    DNS=${Gateway}
-    echo -e "[Network]\nAddress=${Address}\nGateway=${Gateway}\nDNS=${Gateway}" >> /etc/systemd/network/20-wired.network
-  fi
-  chmod 755 /etc/systemd/network/20-wired.network
-
-  # setup wifi
-  gen_wifi_auth
-  systemctl enable iwd
-  mkdir -p /etc/iwd
-  echo -e "[General]\nEnableNetworkConfiguration=true" > /etc/iwd/main.conf
-  echo -e "[Match]\nName=en*\n\n[Network]\nDHCP=yes" > /etc/systemd/network/25-wireless.network
-  chmod 755 /etc/systemd/network/25-wireless.network
-
-  # enable network services
-  systemctl enable systemd-networkd.service
-  systemctl enable systemd-resolved.service
-}
-
-install_from_git() {
-  aur=$1
-  cd /tmp/aur
-  rm -rf "$aur"
-  git clone https://aur.archlinux.org/${aur}.git
-  if [[ $? -ne 0 ]] ; then
-    return
-  fi
-  cd "$aur"
-  makepkg -si --noconfirm
-}
-
-install_from_pkg() {
-  aur=$(basename ${1/.pkgbuild/})
-  dir="/tmp/aur/${aur}"
-  rm -rf "${dir}"
-  mkdir "${dir}"
-  cp ${1} "${dir}/PKGBUILD"
-  cd "${dir}"
-  makepkg -si --noconfirm
-}
-
-install_aur() {
-  mkdir -p /tmp/aur
-
-  for aur in $@ ; do
-    if [[ "$aur" =~ .pkgbuild$ ]] ; then
-      install_from_pkg $aur
+  if [[ $1 == custom ]] ; then
+    if [[ -b ${DRIVE}1 && -b ${DRIVE}2 ]] ; then
+      BOOT_PART=${DRIVE}1
+      ROOT_PART=${DRIVE}2
+    elif [[ -b ${DRIVE}p1 && -b ${DRIVE}p2 ]] ; then
+      BOOT_PART=${DRIVE}p1
+      ROOT_PART=${DRIVE}p2
     else
-      install_from_git $aur
+      error "Error detecting partitions"
     fi
-  done
-}
 
-setup_apps() {
-  # swap
-  systemctl enable systemd-swap
+    mkfs.fat -F32 ${BOOT_PART}
+    mkfs.btrfs -L ${hostname} -f ${ROOT_PART}
 
-  # crontab
-  systemctl enable cronie
+    mount -t btrfs ${ROOT_PART} /mnt/archinstall
 
-  # vi
-  rm /usr/bin/vi 2> /dev/null
-  ln -s /usr/bin/vim /usr/bin/vi
+    btrfs subv create /mnt/archinstall/@
+    btrfs subv create /mnt/archinstall/@home
+    btrfs subv create /mnt/archinstall/@log
+    btrfs subv create /mnt/archinstall/@pkg
+    btrfs subv create /mnt/archinstall/@.snapshots
 
-  # sshd
-  systemctl enable sshd.service
+    mkdir -p /mnt/archinstall/@/var/lib
 
-  # ssh keygen
-  if [[ ! -f ~/.ssh/id_rsa ]] ; then
-    ssh-keygen -q -t rsa -N '' -f ~/.ssh/id_rsa <<<y >/dev/null 2>&1
+    btrfs subv create /mnt/archinstall/@/var/lib/portables
+    btrfs subv create /mnt/archinstall/@/var/lib/machines
+
+    btrfs subv list /mnt/archinstall/
+
+    umount /mnt/archinstall
+
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@ ${ROOT_PART} /mnt/archinstall
+
+    mkdir -p /mnt/archinstall/home /mnt/archinstall/var/log /mnt/archinstall/var/cache/pacman/pkg /mnt/archinstall/.snapshots /mnt/archinstall/boot
+
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@home ${ROOT_PART} /mnt/archinstall/home
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@log ${ROOT_PART} /mnt/archinstall/var/log
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@pkg ${ROOT_PART} /mnt/archinstall/var/cache/pacman/pkg
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@.snapshots ${ROOT_PART} /mnt/archinstall/.snapshots
+    mount -t vfat -o rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro ${BOOT_PART} /mnt/archinstall/boot
   fi
-
-  # key for aur
-  gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
-
-  # setup user-apps
-  su - ${USERNAME} -c "/${SCRIPTNAME} -U"
-
-  # aur services
-  systemctl enable rc-local.service
 }
 
-setup_user_apps() {
-  # install aur
-  install_aur udevil rc-local cpulimit ntfsprogs-ntfs3
-}
+arch_install() {
+  mkdir -p /mnt/data
+  mount -L CIDATA /mnt/data
 
-setup_bootloader() {
-  # grub setup
-  if [[ ${BIOS_BOOTLOADER} == -b ]] ; then
-    grub-install --target=i386-pc ${DRIVE}
-  else
-    grub-install --target=x86_64-efi --bootloader-id=GRUB --efi-directory=/boot
-  fi
-  grub-mkconfig -o /boot/grub/grub.cfg
-}
-
-bootstrap() {
-  if [[ -n ${WIFI_CONF} ]] ; then
-    init_wifi
-  fi
-
-  init_os
+  # setup arch mirrors
+  setup_mirrors
 
   # partition and format target drive
-  setup_drive ${DRIVE}
+  parition_drive
 
-  # mount partitions
-  mkdir -p /mnt
-  mount ${ROOT_PART} /mnt
-  if [[ ${BIOS_BOOTLOADER} != -b ]] ; then
-    mkdir -p /mnt/boot
-    mount ${EFI_PART:-${BOOT_PART}} /mnt/boot
-  fi
+  PART_SIZE=$(fdisk -l ${DRIVE} | tail -1 | awk '{print $4 * 512}')
+  cp -f user_configuration.tpl.json /tmp/user_configuration.json
+  sed -e "s/DEV/${DRIVE}/g" -e "s/PART_SIZE/${PART_SIZE}/g" -i /tmp/user_configuration.json
 
-  # install to drive
-  packages="base linux${LTS} linux${LTS}-headers linux-firmware reflector pacman-contrib archlinux-keyring \
-            systemd-swap grub efibootmgr rsync openssh dos2unix dosfstools lsof file bash-completion p7zip zip unzip \
-            htop sudo lm_sensors cronie screen time alsa-utils \
-            networkmanager openresolv iwd inetutils nfs-utils cifs-utils wget \
-            base-devel vim git man"
-  pacstrap /mnt $packages
+  cp -f user_credentials.tpl.json user_credentials.json
+  sed -e "s/PASSWORD/${PASSWORD}/g" -e "s/USERNAME/${USERNAME}/g" -i /tmp/user_credentials.json
 
-  # copy wi-fi
-  if [[ $(ls /var/lib/iwd/*.psk 2> /dev/null) ]] ; then
-    mkdir -p /mnt/var/lib/iwd
-    chmod 700 /mnt/var/lib/iwd
-    cp -a /var/lib/iwd/*.psk /mnt/var/lib/iwd/
-  fi
+  archinstall --config /tmp/user_configuration.json --creds /tmp/user_credentials.json
+  checkError "archinstall"
 
-  # generate fstab
-  genfstab -U /mnt >> /mnt/etc/fstab
+  # copy files
+  cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
 
-  # user files
-  USER_HOME=/mnt/home/${USERNAME}
-  cp -r /mnt/etc/skel ${USER_HOME}
+  USER_HOME=/mnt/archinstall/home/${USERNAME}
   if [[ -d ${USER_FILES} ]] ; then
     cp -ar "${USER_FILES}/." ${USER_HOME}
   elif [[ -f ${USER_FILES} ]] ; then
@@ -374,157 +158,166 @@ bootstrap() {
     esac
     cd -
   fi
-
-  # ssh-keys
-  if [[ ! -z ${SSH_KEY} ]] ; then
-    mkdir -p ${USER_HOME}/.ssh
-    echo "${SSH_KEY}" >> ${USER_HOME}/.ssh/authorized_keys
-  fi
-
   # ownership and permission
   chmod 700 ${USER_HOME}/.ssh
-  chmod 600 ${USER_HOME}/.ssh/authorized_keys
-  chown -R ${USER_UID}:${USER_GID} ${USER_HOME}
+  chmod 600 ${USER_HOME}/.ssh/*
 
-  # setup and run post-pacstrap
-  cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
-  if [[ -z ${BASH_SOURCE} ]] ; then
-    curl -L ${SCRIPTURL} -o /mnt/${SCRIPTNAME}
+  arch-chroot -u ${USERNAME} /mnt/archinstall mkdir -p /home/${USERNAME}/.local/share
+  arch-chroot -u ${USERNAME} /mnt/archinstall git clone git@github.com:vm75/bootstrap.git /home/${USERNAME}/.local/share/bootstrap
+  arch-chroot /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap --post-install
+
+  arch-chroot -u ${USERNAME} /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap --post-install
+
+  # unmount
+  umount ${BOOT_PART}
+  for dev in $(mount | grep "${ROOT_PART} " | awk '{print $1}') ; do
+    umount ${dev}
+  done
+}
+
+setup_bridge() {
+  interface=$(nmcli device | grep ethernet -m 1 | sort | awk '{print $1}')
+  uuid=$(nmcli con show -f UUID,TYPE | grep ethernet -m 1 | sort | awk '{print $1}')
+  if [[ -z ${ETH_IP} ]]; then
+    ip=$(ip -4 a show dev ${interface} | grep inet -m 1 | awk '{print $2}')
   else
-    cp ${BASH_SOURCE} -o /mnt/${SCRIPTNAME}
+    ip=${ETH_IP}
   fi
-  chmod +x /mnt/${SCRIPTNAME}
-  arch-chroot /mnt /${SCRIPTNAME} -P ${BIOS_BOOTLOADER} ${ARGS}
-  rm /mnt/${SCRIPTNAME}
 
-  # unmount partitions
-  umount ${EFI_PART:-${BOOT_PART}} ${ROOT_PART} 2> /dev/null
+  if [[ -z "${interface}" || -z "${uuid}" ]]; then
+    return
+  fi
+
+  sudo nmcli con mod ${uuid} ifname ${interface} con-name ${interface}
+  sudo nmcli con add type bridge ifname br0 con-name br0
+  sudo nmcli con add type bridge-slave ifname ${interface} master br0 con-name ${interface}-slave
+  if [[ -n ${ip} ]] ; then
+    sudo nmcli con mod br0 ipv4.addresses "${ip}" ipv4.dhcp-hostname ${HOSTNAME%%.*} ipv4.ignore-auto-routes no ipv4.ignore-auto-dns no ipv4.method auto
+  fi
+  sudo nmcli con mod br0 ipv6.method ignore
+  sudo nmcli con up br0
+  sudo nmcli con up ${interface}-slave
+}
+
+setup_wifi() {
+  interface=$(nmcli device | grep wifi -m 1 | sort | awk '{print $1}')
+  if [[ -z "${interface}" || -z "${WIFI_SSID}" || -z "${WIFI_PASSWORD}" ]]; then
+    return
+  fi
+
+  psk=$(wpa_passphrase "${WIFI_SSID}" "${WIFI_PASSWORD}" | grep -e "\spsk" | cut -d= -f2)
+
+  sudo nmcli con add type wifi ifname ${interface} ssid "${WIFI_SSID}" con-name ${interface}
+  sudo nmcli con mod ${interface} wifi-sec.key-mgmt wpa-psk wifi-sec.psk "${psk}"
+
+  if [[ -n "${WIFI_IP}" ]]; then
+    sudo nmcli con mod ${interface} ipv4.addresses "${WIFI_IP}"
+  fi
+}
+
+root_postinstall() {
+  # user
+  usermod -aG wheel,audio ${USERNAME}
+
+  # sudo
+  mkdir -p /etc/sudoers.d
+  echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/00_${USERNAME}
+
+  # key for aur
+  gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
+
+  # vi
+  rm -f /usr/bin/vi
+  ln -s /usr/bin/vim /usr/bin/vi
+
+  # crontab
+  systemctl enable cronie
+
+  # sshd
+  systemctl enable sshd.service
+
+  # network
+  setup_bridge
+  setup_wifi
+
+  exit 0
+}
+
+install_yay() {
+  mkdir -p .aur
+  cd .aur
+
+  git clone https://aur.archlinux.org/yay.git
+  cd yay
+  makepkg -si --noconfirm
+  checkError "installing yay"
+  cd ~
+}
+
+user_postinstall() {
+  install_yay
+
+  # install aur apps
+  yay -Sy --needed --noconfirm udevil rc-local cpulimit ntfsprogs-ntfs3
+
+  # aur services
+  systemctl --user enable rc-local.service
+
+  exit 0
 }
 
 main() {
-  if [[ ! -d /sys/firmware/efi ]] ; then
-    BIOS_BOOTLOADER="-b"
+  cd ${BOOTSTRAP_DIR}
+
+  if [[ $1 == --post-install ]] ; then
+    if [[ ${USER} == root ]] ; then
+      root_postinstall
+    else
+      user_postinstall
+    fi
   fi
 
-  MODE=bootstrap
-  ARGS=
-  while getopts "DLPUbc:d:e:f:hi:k:l:n:p:s:t:u:w:" option; do
+  mkdir -p /mnt/data
+  mount -L CIDATA /mnt/data
+  if [[ -f /mnt/data/.archinstall ]] ; then
+    . /mnt/data/.archinstall
+  fi
+
+  while getopts "Dc:d:h" option; do
     case "${option}" in
     D)
       set -x
       ;;
-    L)
-      LTS="-lts"
-      ;;
-    P)
-      MODE=post-pacstrap
-      ;;
-    U)
-      MODE=user-apps
-      ;;
-    b)
-      BIOS_BOOTLOADER="-b"
-      ;;
     c)
-      COUNTRIES=${OPTARG}
-      ARGS="${ARGS} -c ${COUNTRIES}"
+      if [[ ! -f ${OPTARG} ]] ; then
+        error "Invalid config file ${OPTARG}"
+      fi
+      . ${OPTARG}
       ;;
     d)
-      if [[ -b /dev/${OPTARG} ]] ; then
-        DRIVE="/dev/${OPTARG}"
-      elif [[ -b ${OPTARG} ]] ; then
-        DRIVE=${OPTARG}
-      fi
-      ;;
-    e)
-      if [[ -b ${OPTARG} ]] ; then
-        EFI_PART=${OPTARG}
-      fi
-      ;;
-    f)
-      USER_FILES=$(realpath "${OPTARG}")
+      DRIVE=${OPTARG}
       ;;
     h)
       usage
       exit
       ;;
-    i)
-      IP=${OPTARG}
-      ARGS="${ARGS} -i ${IP}"
-      ;;
-    k)
-      KEYMAP=${OPTARG}
-      ARGS="${ARGS} -k ${KEYMAP}"
-      ;;
-    l)
-      LOCALE=${OPTARG}
-      ARGS="${ARGS} -l ${LOCALE}"
-      ;;
-    n)
-      HOSTNAME=${OPTARG}
-      ARGS="${ARGS} -n ${HOSTNAME}"
-      ;;
-    p)
-      PASSWORD=${OPTARG}
-      ARGS="${ARGS} -p ${PASSWORD}"
-      ;;
-    s)
-      SSH_KEY=${OPTARG}
-      ARGS="${ARGS} -s ${SSH_KEY}"
-      ;;
-    t)
-      if [[ -f "/usr/share/zoneinfo/${TIMEZONE}" ]] ; then
-        TIMEZONE=${OPTARG}
-        ARGS="${ARGS} -t ${TIMEZONE}"
-      fi
-      ;;
-    u)
-      USERNAME=${OPTARG}
-      ARGS="${ARGS} -u ${USERNAME}"
-      ;;
-    w)
-      WIFI_CONF=${OPTARG}
-      ARGS="${ARGS} -w ${WIFI_CONF}"
-      ;;
     esac
   done
   shift $((OPTIND-1))
 
-  if [[ ${MODE} != user-apps && -z ${DRIVE} ]] ; then
+  if [[ -z ${DRIVE} ]] ; then
     error "No valid drive found"
   fi
 
-  case ${MODE} in
-  bootstrap)
-    exec > >(tee $LOG_FILE) 2>&1
+  if [[ -b /dev/${DRIVE} ]] ; then
+    DRIVE="/dev/${DRIVE}"
+  elif [[ -b ${DRIVE} ]] ; then
+    DRIVE=${DRIVE}
+  else
+    error "Invalid drive ${DRIVE}"
+  fi
 
-    bootstrap
-
-    echo
-    echo "Installed with these settings:"
-    echo "  ROOT PARTITION=${ROOT_PART}"
-    echo "  BOOT PARTITION=${EFI_PART:-${BOOT_PART}}"
-    echo "  TIMEZONE=${TIMEZONE}"
-    echo "  LOCALE=${LOCALE}"
-    echo "  KEYMAP=${KEYMAP}"
-    echo "  HOSTNAME=${HOSTNAME}"
-    echo "  USERNAME=${USERNAME}"
-    echo "  PASSWORD=${PASSWORD}"
-    echo "  MIRROR COUNTRIES=${COUNTRIES}"
-    ;;
-  post-pacstrap)
-    setup_datetime
-    setup_language
-    setup_hostname
-    setup_user
-    setup_network
-    setup_apps
-    setup_bootloader
-    ;;
-  user-apps)
-    setup_user_apps
-    ;;
-  esac
+  arch_install
 }
 
 main "$@"
