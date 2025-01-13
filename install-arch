@@ -3,10 +3,6 @@
 SCRIPTNAME=install-arch
 BOOTSTRAP_DIR=$(dirname "${BASH_SOURCE}")
 
-# log
-LOG_FILE=~/${SCRIPTNAME}.log
-exec > >(tee $LOG_FILE) 2>&1
-
 # defaults
 COUNTRIES=us,ca # -c
 HOSTNAME=arch
@@ -114,11 +110,63 @@ parition_drive() {
   fi
 }
 
+setup_bridge() {
+  interface=$(nmcli device | grep ethernet -m 1 | sort | awk '{print $1}')
+  uuid=$(nmcli con show -f UUID,TYPE | grep ethernet -m 1 | sort | awk '{print $1}')
+  if [[ -z ${ETH_IP} ]]; then
+    ip=$(ip -4 a show dev ${interface} | grep inet -m 1 | awk '{print $2}')
+  else
+    ip=${ETH_IP}
+  fi
+
+  if [[ -z "${interface}" || -z "${uuid}" ]]; then
+    return
+  fi
+
+  sudo nmcli con mod ${uuid} ifname ${interface} con-name ${interface}
+  sudo nmcli con add type bridge ifname br0 con-name br0
+  sudo nmcli con add type bridge-slave ifname ${interface} master br0 con-name ${interface}-slave
+  if [[ -n ${ip} ]] ; then
+    sudo nmcli con mod br0 ipv4.addresses "${ip}" ipv4.dhcp-hostname ${HOSTNAME%%.*} ipv4.ignore-auto-routes no ipv4.ignore-auto-dns no ipv4.method auto
+  fi
+  sudo nmcli con mod br0 ipv6.method ignore
+  sudo nmcli con up br0
+  sudo nmcli con up ${interface}-slave
+}
+
+setup_wifi() {
+  interface=$(nmcli device | grep wifi -m 1 | sort | awk '{print $1}')
+  if [[ -z "${interface}" || -z "${WIFI_SSID}" || -z "${WIFI_PASSWORD}" ]]; then
+    return
+  fi
+
+  psk=$(wpa_passphrase "${WIFI_SSID}" "${WIFI_PASSWORD}" | grep -e "\spsk" | cut -d= -f2)
+
+  sudo nmcli con add type wifi ifname ${interface} ssid "${WIFI_SSID}" con-name ${interface}
+  sudo nmcli con mod ${interface} wifi-sec.key-mgmt wpa-psk wifi-sec.psk "${psk}"
+
+  if [[ -n "${WIFI_IP}" ]]; then
+    sudo nmcli con mod ${interface} ipv4.addresses "${WIFI_IP}"
+  fi
+}
+
 arch_install() {
+  # log
+  LOG_FILE=~/${SCRIPTNAME}.log
+  exec > >(tee $LOG_FILE) 2>&1
+
   cd ${BOOTSTRAP_DIR}
 
   mkdir -p /mnt/data
   mount -L CIDATA /mnt/data
+
+  # network
+  if [[ -z ${SKIP_NETWORK} ]] ; then
+    pacman -Sy --noconfirm networkmanager
+    systemctl start NetworkManager
+    setup_bridge
+    setup_wifi
+  fi
 
   # setup arch mirrors
   setup_mirrors
@@ -141,7 +189,9 @@ arch_install() {
   echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /mnt/archinstall/etc/sudoers.d/00_${USERNAME}
 
   # copy files
-  cp /etc/pacman.d/mirrorlist /mnt//archinstall/etc/pacman.d/mirrorlist
+  cp /etc/pacman.d/mirrorlist /mnt/archinstall/etc/pacman.d/mirrorlist
+  mkdir -p /mnt/archinstall/etc/NetworkManager/system-connections
+  cp /etc/NetworkManager/system-connections/* /mnt/archinstall/etc/NetworkManager/system-connections/
 
   USER_HOME=/mnt/archinstall/home/${USERNAME}
   if [[ -d ${USER_FILES} ]] ; then
@@ -184,71 +234,6 @@ arch_install() {
   done
 }
 
-setup_bridge() {
-  interface=$(nmcli device | grep ethernet -m 1 | sort | awk '{print $1}')
-  uuid=$(nmcli con show -f UUID,TYPE | grep ethernet -m 1 | sort | awk '{print $1}')
-  if [[ -z ${ETH_IP} ]]; then
-    ip=$(ip -4 a show dev ${interface} | grep inet -m 1 | awk '{print $2}')
-  else
-    ip=${ETH_IP}
-  fi
-
-  if [[ -z "${interface}" || -z "${uuid}" ]]; then
-    return
-  fi
-
-  sudo nmcli con mod ${uuid} ifname ${interface} con-name ${interface}
-  sudo nmcli con add type bridge ifname br0 con-name br0
-  sudo nmcli con add type bridge-slave ifname ${interface} master br0 con-name ${interface}-slave
-  if [[ -n ${ip} ]] ; then
-    sudo nmcli con mod br0 ipv4.addresses "${ip}" ipv4.dhcp-hostname ${HOSTNAME%%.*} ipv4.ignore-auto-routes no ipv4.ignore-auto-dns no ipv4.method auto
-  fi
-  sudo nmcli con mod br0 ipv6.method ignore
-  sudo nmcli con up br0
-  sudo nmcli con up ${interface}-slave
-}
-
-setup_wifi() {
-  interface=$(nmcli device | grep wifi -m 1 | sort | awk '{print $1}')
-  if [[ -z "${interface}" || -z "${WIFI_SSID}" || -z "${WIFI_PASSWORD}" ]]; then
-    return
-  fi
-
-  psk=$(wpa_passphrase "${WIFI_SSID}" "${WIFI_PASSWORD}" | grep -e "\spsk" | cut -d= -f2)
-
-  sudo nmcli con add type wifi ifname ${interface} ssid "${WIFI_SSID}" con-name ${interface}
-  sudo nmcli con mod ${interface} wifi-sec.key-mgmt wpa-psk wifi-sec.psk "${psk}"
-
-  if [[ -n "${WIFI_IP}" ]]; then
-    sudo nmcli con mod ${interface} ipv4.addresses "${WIFI_IP}"
-  fi
-}
-
-root_postinstall() {
-  cd ${HOME}
-
-  # key for aur
-  gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
-
-  # vi
-  rm -f /usr/bin/vi
-  ln -s /usr/bin/vim /usr/bin/vi
-
-  # crontab
-  systemctl enable cronie
-
-  # sshd
-  systemctl enable sshd.service
-
-  # network
-  if [[ -z ${SKIP_NETWORK} ]] ; then
-    setup_bridge
-    setup_wifi
-  fi
-
-  exit 0
-}
-
 install_yay() {
   mkdir -p .aur
   cd .aur
@@ -260,13 +245,28 @@ install_yay() {
   cd ~
 }
 
-user_postinstall() {
+post_install() {
+  echo "Running post_install as ${USER}"
+
   cd ${HOME}
+
+  # crontab
+  systemctl enable cronie
+
+  # sshd
+  systemctl enable sshd.service
+
+  # key for aur
+  sudo gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
 
   install_yay
 
   # install aur apps
   yay -Sy --needed --noconfirm udevil rc-local cpulimit ntfsprogs-ntfs3
+
+  # vi
+  sudo rm -f /usr/bin/vi
+  sudo ln -s /usr/bin/vim /usr/bin/vi
 
   # user
   sudo usermod -aG wheel,audio ${USER}
@@ -285,11 +285,7 @@ user_postinstall() {
 
 main() {
   if [[ $1 == --post-install ]] ; then
-    if [[ ${USER} == root ]] ; then
-      root_postinstall
-    else
-      user_postinstall
-    fi
+    post_install
   fi
 
   mkdir -p /mnt/data
