@@ -169,7 +169,7 @@ arch_install() {
   chmod 600 ${USER_HOME}/.ssh/*
 
   arch-chroot -u ${USERNAME} /mnt/archinstall mkdir -p /home/${USERNAME}/.local/share
-  arch-chroot -u ${USERNAME} /mnt/archinstall git clone git@github.com:vm75/bootstrap.git /home/${USERNAME}/.local/share/bootstrap
+  arch-chroot -u ${USERNAME} /mnt/archinstall git clone https://github.com/vm75/bootstrap.git /home/${USERNAME}/.local/share/bootstrap
   arch-chroot /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap --post-install
 
   arch-chroot -u ${USERNAME} /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap --post-install
