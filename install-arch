@@ -133,6 +133,10 @@ arch_install() {
   archinstall --config /tmp/user_configuration.json --creds /tmp/user_credentials.json --silent
   checkError "archinstall"
 
+  # sudo
+  mkdir -p /etc/sudoers.d
+  echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /mnt/archinstall/etc/sudoers.d/00_${USERNAME}
+
   # copy files
   cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
 
@@ -220,13 +224,6 @@ setup_wifi() {
 root_postinstall() {
   cd ${HOME}
 
-  # user
-  usermod -aG wheel,audio ${USERNAME}
-
-  # sudo
-  mkdir -p /etc/sudoers.d
-  echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/00_${USERNAME}
-
   # key for aur
   gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
 
@@ -267,6 +264,9 @@ user_postinstall() {
 
   # install aur apps
   yay -Sy --needed --noconfirm udevil rc-local cpulimit ntfsprogs-ntfs3
+
+  # user
+  sudo usermod -aG wheel,audio ${USER}
 
   # aur services
   systemctl --user enable rc-local.service
