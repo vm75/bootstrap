@@ -141,41 +141,38 @@ arch_install() {
   echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /mnt/archinstall/etc/sudoers.d/00_${USERNAME}
 
   # copy files
-  cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+  cp /etc/pacman.d/mirrorlist /mnt//archinstall/etc/pacman.d/mirrorlist
 
   USER_HOME=/mnt/archinstall/home/${USERNAME}
   if [[ -d ${USER_FILES} ]] ; then
     cp -ar "${USER_FILES}/." ${USER_HOME}
-  elif [[ -f ${USER_FILES} ]] ; then
+  elif ($(file "${USER_FILES}") | grep -q compressed) ; then
     cd ${USER_HOME}
-    case "${USER_FILES}" in
-      *.tar)
-        tar xf "${USER_FILES}"
-        ;;
-      *.tar.gz|*.tgz)
-        tar xzf "${USER_FILES}"
-        ;;
-      *.tar.bz2|*.tbz)
-        tar xjf "${USER_FILES}"
-        ;;
-      *.tar.xz|*.txz)
-        tar xJf "${USER_FILES}"
-        ;;
-      *)
-        cp "${USER_FILES}" .
-        ;;
-    esac
+    tar xf "${USER_FILES}"
     cd -
+  else
+    cp -a "${USER_FILES}" ${USER_HOME}
   fi
-  # ownership and permission
-  chmod 700 ${USER_HOME}/.ssh
-  chmod 600 ${USER_HOME}/.ssh/*
 
+  # ssh key
+  if [[ -n ${SSH_KEY} ]] ; then
+    mkdir -p ${USER_HOME}/.ssh
+    echo "${SSH_KEY}" >> ${USER_HOME}/.ssh/authorized_keys
+  fi
+
+  # ownership and permission
+  chown -R ${USERNAME}:${USERNAME} ${USER_HOME}
+  if [[ -d ${USER_HOME}/.ssh ]] ; then
+    chmod 700 ${USER_HOME}/.ssh
+    chmod 600 ${USER_HOME}/.ssh/*
+  fi
+
+  # post install
   arch-chroot -u ${USERNAME} /mnt/archinstall mkdir -p /home/${USERNAME}/.local/share
   arch-chroot -u ${USERNAME} /mnt/archinstall git clone https://github.com/vm75/bootstrap.git /home/${USERNAME}/.local/share/bootstrap
-  arch-chroot /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap --post-install
 
-  arch-chroot -u ${USERNAME} /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap --post-install
+  arch-chroot /mnt/archinstall /home/${USERNAME}/.local/share/install-arch --post-install
+  arch-chroot -u ${USERNAME} /mnt/archinstall /home/${USERNAME}/.local/share/install-arch --post-install
 
   # unmount
   umount ${BOOT_PART}
@@ -270,6 +267,12 @@ user_postinstall() {
 
   # user
   sudo usermod -aG wheel,audio ${USER}
+
+  # shenv
+  if [[ -f ${HOME}/.gitconfig ]] ; then
+    git clone https://github.com/vm75/shenv.git ${HOME}/.local/share/shenv
+    ${HOME}/.local/share/shenv/bin/shenv
+  fi
 
   # aur services
   systemctl --user enable rc-local.service
