@@ -125,7 +125,7 @@ arch_install() {
 
   PART_SIZE=$(fdisk -l ${DRIVE} | tail -1 | awk '{print $4 * 512}')
   cp -f user_configuration.tpl.json /tmp/user_configuration.json
-  sed -e "s#DEV#${DRIVE}#g" -e "s#PART_SIZE#${PART_SIZE}#g" -i /tmp/user_configuration.json
+  sed -e "s#DEV#${DRIVE}#g" -e "s#PART_SIZE#${PART_SIZE}#g" -e "s#HOSTNAME#${HOSTNAME}#g" -i /tmp/user_configuration.json
 
   cp -f user_credentials.tpl.json /tmp/user_credentials.json
   sed -e "s#PASSWORD#${PASSWORD}#g" -e "s#USERNAME#${USERNAME}#g" -i /tmp/user_credentials.json
@@ -218,7 +218,7 @@ setup_wifi() {
 }
 
 root_postinstall() {
-  cd ${HOME} 
+  cd ${HOME}
 
   # user
   usermod -aG wheel,audio ${USERNAME}
@@ -261,7 +261,7 @@ install_yay() {
 }
 
 user_postinstall() {
-  cd ${HOME} 
+  cd ${HOME}
 
   install_yay
 

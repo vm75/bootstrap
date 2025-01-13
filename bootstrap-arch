@@ -3,6 +3,6 @@
 pacman -Syy --noconfirm
 pacman -Sy --needed --noconfirm git bash
 
-git clone git@github.com:vm75/bootstrap.git
+git clone https://github.com/vm75/bootstrap.git
 
 ./bootstrap/install-arch "$@"
