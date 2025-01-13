@@ -295,7 +295,13 @@ main() {
       . ${OPTARG}
       ;;
     d)
-      DRIVE=${OPTARG}
+      if [[ -b /dev/${OPTARG} ]] ; then
+        DRIVE="/dev/${OPTARG}"
+      elif [[ -b ${OPTARG} ]] ; then
+        DRIVE=${OPTARG}
+      else
+        error "Invalid drive ${OPTARG}"
+      fi
       ;;
     h)
       usage
@@ -307,14 +313,6 @@ main() {
 
   if [[ -z ${DRIVE} ]] ; then
     error "No valid drive found"
-  fi
-
-  if [[ -b /dev/${DRIVE} ]] ; then
-    DRIVE="/dev/${DRIVE}"
-  elif [[ -b ${DRIVE} ]] ; then
-    DRIVE=${DRIVE}
-  else
-    error "Invalid drive ${DRIVE}"
   fi
 
   arch_install
