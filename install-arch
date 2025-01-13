@@ -9,6 +9,9 @@ exec > >(tee $LOG_FILE) 2>&1
 
 # defaults
 COUNTRIES=us,ca # -c
+HOSTNAME=arch
+USERNAME=admin
+PASSWORD=admin
 
 error() {
   local msg=${1}
