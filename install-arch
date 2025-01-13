@@ -112,6 +112,8 @@ parition_drive() {
 }
 
 arch_install() {
+  cd ${BOOTSTRAP_DIR}
+
   mkdir -p /mnt/data
   mount -L CIDATA /mnt/data
 
@@ -123,10 +125,10 @@ arch_install() {
 
   PART_SIZE=$(fdisk -l ${DRIVE} | tail -1 | awk '{print $4 * 512}')
   cp -f user_configuration.tpl.json /tmp/user_configuration.json
-  sed -e "s/DEV/${DRIVE}/g" -e "s/PART_SIZE/${PART_SIZE}/g" -i /tmp/user_configuration.json
+  sed -e "s#DEV#${DRIVE}#g" -e "s#PART_SIZE#${PART_SIZE}#g" -i /tmp/user_configuration.json
 
-  cp -f user_credentials.tpl.json user_credentials.json
-  sed -e "s/PASSWORD/${PASSWORD}/g" -e "s/USERNAME/${USERNAME}/g" -i /tmp/user_credentials.json
+  cp -f user_credentials.tpl.json /tmp/user_credentials.json
+  sed -e "s#PASSWORD#${PASSWORD}#g" -e "s#USERNAME#${USERNAME}#g" -i /tmp/user_credentials.json
 
   archinstall --config /tmp/user_configuration.json --creds /tmp/user_credentials.json
   checkError "archinstall"
@@ -216,6 +218,8 @@ setup_wifi() {
 }
 
 root_postinstall() {
+  cd ${HOME} 
+
   # user
   usermod -aG wheel,audio ${USERNAME}
 
@@ -237,8 +241,10 @@ root_postinstall() {
   systemctl enable sshd.service
 
   # network
-  setup_bridge
-  setup_wifi
+  if [[ -z ${SKIP_NETWORK} ]] ; then
+    setup_bridge
+    setup_wifi
+  fi
 
   exit 0
 }
@@ -255,6 +261,8 @@ install_yay() {
 }
 
 user_postinstall() {
+  cd ${HOME} 
+
   install_yay
 
   # install aur apps
@@ -267,8 +275,6 @@ user_postinstall() {
 }
 
 main() {
-  cd ${BOOTSTRAP_DIR}
-
   if [[ $1 == --post-install ]] ; then
     if [[ ${USER} == root ]] ; then
       root_postinstall
@@ -283,10 +289,13 @@ main() {
     . /mnt/data/.archinstall
   fi
 
-  while getopts "Dc:d:h" option; do
+  while getopts "DNc:d:h" option; do
     case "${option}" in
     D)
       set -x
+      ;;
+    N)
+      SKIP_NETWORK=1
       ;;
     c)
       if [[ ! -f ${OPTARG} ]] ; then
