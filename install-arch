@@ -179,18 +179,8 @@ arch_install() {
   mkdir -p /etc/sudoers.d
   echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /mnt/archinstall/etc/sudoers.d/00_${USERNAME}
 
-  # network
-  if [[ -z ${SKIP_NETWORK} ]] ; then
-    pacman -Sy --noconfirm networkmanager
-    systemctl start NetworkManager
-    setup_bridge
-    setup_wifi
-  fi
-
   # copy files
   cp /etc/pacman.d/mirrorlist /mnt/archinstall/etc/pacman.d/mirrorlist
-  mkdir -p /mnt/archinstall/etc/NetworkManager/system-connections
-  cp /etc/NetworkManager/system-connections/* /mnt/archinstall/etc/NetworkManager/system-connections/
 
   USER_HOME=/mnt/archinstall/home/${USERNAME}
   if [[ -d ${USER_FILES} ]] ; then
@@ -219,6 +209,16 @@ arch_install() {
   mkdir -p /mnt/archinstall/home/${USERNAME}/.local/share
   cp -a ../bootstrap /mnt/archinstall/home/${USERNAME}/.local/share/bootstrap
   arch-chroot -u ${USERNAME} /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap/install-arch --post-install
+
+  # network
+  if [[ -z ${SKIP_NETWORK} ]] ; then
+    pacman -Sy --noconfirm networkmanager
+    systemctl start NetworkManager
+    setup_bridge
+    setup_wifi
+    mkdir -p /mnt/archinstall/etc/NetworkManager/system-connections
+    cp /etc/NetworkManager/system-connections/* /mnt/archinstall/etc/NetworkManager/system-connections/
+  fi
 }
 
 install_yay() {
