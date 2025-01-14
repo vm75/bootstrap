@@ -5,6 +5,28 @@ error() {
   exit ${2:-1}
 }
 
+init_asuswrt() {
+  export ENTWARE_ROOT=$(ls -d /tmp/mnt/*/entware)
+  export HOME=${ENTWARE_ROOT}/home
+
+  opkg update
+  opkg upgrade
+  opkg install bash vim-full git git-http htop rsync dropbearconvert nginx coreutils-mktemp coreutils-stat procps-ng-pkill
+
+  echo "dbclient -y -i ${HOME}/.ssh/id_rsa \$*" > ${HOME}/.gitssh.sh
+  chmod +x ${HOME}/.gitssh.sh
+  export GIT_SSH=${HOME}/.gitssh.sh
+
+  profileAdd=/jffs/configs/profile.add
+  echo -e '#!/usr/bin/env sh\n' > ${profileAdd}
+  echo -e "export HOME=${HOME}\ncd \${HOME}\n" >> ${profileAdd}
+  echo -e "# bash-start" >> ${profileAdd}
+  echo -e "[ -f /opt/bin/bash ] && exec /opt/bin/bash" >> ${profileAdd}
+  echo -e "# bash-end" >> ${profileAdd}
+
+  sed -e "s/started.'/started.' \&/" -i ${ENTWARE_ROOT}/etc/init.d/S80nginx
+}
+
 setup_ssh() {
   if [ ! -f ~/.ssh/id_rsa.pub ] ; then
     mkdir -p -m 700 ~/.ssh
@@ -37,33 +59,8 @@ setup_shenv() {
   ~/.local/share/shenv/bin/shenv -i -p ${GITHUB_TOKEN:-mytoken}
 }
 
-init_asuswrt() {
-  export ENTWARE_ROOT=$(ls -d /tmp/mnt/*/entware)
-  export HOME=${ENTWARE_ROOT}/home
-
-  opkg update
-  opkg upgrade
-  opkg install bash vim-full git git-http htop rsync dropbearconvert nginx coreutils-mktemp coreutils-stat procps-ng-pkill
-
-  echo "dbclient -y -i ${HOME}/.ssh/id_rsa \$*" > ${HOME}/.gitssh.sh
-  chmod +x ${HOME}/.gitssh.sh
-  export GIT_SSH=${HOME}/.gitssh.sh
-
-  profileAdd=/jffs/configs/profile.add
-  echo -e '#!/usr/bin/env sh\n' > ${profileAdd}
-  echo -e "export HOME=${HOME}\ncd \${HOME}\n" >> ${profileAdd}
-  echo -e "# bash-start" >> ${profileAdd}
-  echo -e "[ -f /opt/bin/bash ] && exec /opt/bin/bash" >> ${profileAdd}
-  echo -e "# bash-end" >> ${profileAdd}
-
-  sed -e "s/started.'/started.' \&/" -i ${ENTWARE_ROOT}/etc/init.d/S80nginx
-}
-
 main() {
-  if [ $(uname -o) == ASUSWRT-Merlin ] ; then
-    init_asuswrt
-  fi
-
+  init_asuswrt
   setup_ssh
   setup_shenv
   echo "All set!"

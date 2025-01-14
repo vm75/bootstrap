@@ -321,6 +321,7 @@ main() {
   fi
 
   arch_install
+  echo "All set!"
 }
 
 main "$@"

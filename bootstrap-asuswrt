@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+pacman -Syy --noconfirm
+pacman -Sy --needed --noconfirm git bash
+
+git clone https://github.com/vm75/bootstrap.git
+
+./bootstrap/install-asuswrt "$@"

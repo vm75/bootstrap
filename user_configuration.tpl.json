@@ -137,7 +137,6 @@
         "jq",
         "htop",
         "inetutils",
-        "iwd",
         "linux-firmware",
         "linux-headers",
         "lm_sensors",
