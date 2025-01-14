@@ -237,9 +237,10 @@ install_yay() {
 }
 
 post_install() {
+  export USER=$(whoami)
   echo "Running post_install as ${USER}"
 
-  export HOME=/home/${USERNAME}
+  export HOME=/home/${USER}
   cd ${HOME}
 
   sudo chown -R ${USER}:${USER} ${HOME}
