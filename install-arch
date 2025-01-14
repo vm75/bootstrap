@@ -220,8 +220,8 @@ arch_install() {
   fi
 
   # post install
-  arch-chroot -u ${USERNAME} /mnt/archinstall mkdir -p /home/${USERNAME}/.local/share
-  cp -a ../bootstrap /home/${USERNAME}/.local/share/bootstrap
+  mkdir -p /mnt/archinstall/home/${USERNAME}/.local/share
+  cp -a ../bootstrap /mnt/archinstall/home/${USERNAME}/.local/share/bootstrap
   arch-chroot -u ${USERNAME} /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap/install-arch --post-install
 }
 
