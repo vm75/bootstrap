@@ -157,14 +157,6 @@ arch_install() {
 
   cd ${BOOTSTRAP_DIR}
 
-  # network
-  if [[ -z ${SKIP_NETWORK} ]] ; then
-    pacman -Sy --noconfirm networkmanager
-    systemctl start NetworkManager
-    setup_bridge
-    setup_wifi
-  fi
-
   # setup arch mirrors
   setup_mirrors
 
@@ -184,6 +176,14 @@ arch_install() {
   # sudo
   mkdir -p /etc/sudoers.d
   echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /mnt/archinstall/etc/sudoers.d/00_${USERNAME}
+
+  # network
+  if [[ -z ${SKIP_NETWORK} ]] ; then
+    pacman -Sy --noconfirm networkmanager
+    systemctl start NetworkManager
+    setup_bridge
+    setup_wifi
+  fi
 
   # copy files
   cp /etc/pacman.d/mirrorlist /mnt/archinstall/etc/pacman.d/mirrorlist
