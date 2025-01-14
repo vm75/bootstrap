@@ -183,24 +183,31 @@ mount_data_drive() {
     fi
   fi
 
-  mkdir -p /mnt/userdata
-  mount -t btrfs ${DATA_PART} /mnt/userdata
+  DATA_DIR=/mnt/data
+  mkdir -p ${DATA_DIR}
+  mount -t btrfs ${DATA_PART} ${DATA_DIR}
   checkError "mounting data drive"
 
-  btrfs subv create /mnt/userdata/@home
-  btrfs subv create /mnt/userdata/@vms
-  btrfs subv create /mnt/userdata/@library
+  btrfs subv create ${DATA_DIR}/@home
+  btrfs subv create ${DATA_DIR}/@vms
+  btrfs subv create ${DATA_DIR}/@library
 }
 
 setup_data_drive() {
   mount_data_drive
 
   uuid=$(blkid ${DATA_PART} -o value -s UUID)
-  for vol in $(btrfs subv list /mnt/userdata | awk '{print $9}') ; do
+  for vol in $(btrfs subv list ${DATA_DIR} | awk '{print $9}') ; do
     # if vol start with @
     if [[ "${vol}" == "@"* ]] ; then
-      mkdir -p ${MOUNT_DIR}/home/${USERNAME}/${vol#\@}
-      echo "UUID=${uuid} /home/${USERNAME}/${vol#\@} btrfs rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/${vol},nofail 0 0" >> ${MOUNT_DIR}/etc/fstab
+      if [[ "${vol}" == "@home" ]] ; then
+        echo "UUID=${uuid} /home/${USERNAME} btrfs rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/${vol},nofail 0 0" >> ${MOUNT_DIR}/etc/fstab
+        cp -r ${MOUNT_DIR}/home/${USERNAME}/. ${DATA_DIR}/@home
+      else
+        mkdir -p ${MOUNT_DIR}/home/${USERNAME}/${vol#\@}
+        chown 1000:1000 ${MOUNT_DIR}/home/${USERNAME}/${vol#\@}
+        echo "UUID=${uuid} /home/${USERNAME}/${vol#\@} btrfs rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/${vol},nofail 0 0" >> ${MOUNT_DIR}/etc/fstab
+      fi
     else
       mkdir -p ${MOUNT_DIR}/${vol}
       echo "UUID=${uuid} /${vol} btrfs rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/${vol},nofail 0 0" >> ${MOUNT_DIR}/etc/fstab
@@ -345,7 +352,7 @@ post_install() {
 
   # shenv
   if [[ -f ${HOME}/.gitconfig.vm75 ]] ; then
-    git clone https://github.com/vm75/shenv.git ${HOME}/.local/share/shenv
+    git clone --recurse-submodules git@github.com:vm75/shenv.git ${HOME}/.local/share/shenv
     ${HOME}/.local/share/shenv/bin/shenv
 
     # features
@@ -362,10 +369,11 @@ main() {
     post_install
   fi
 
-  mkdir -p /mnt/data
-  mount -L CIDATA /mnt/data
-  if [[ -f /mnt/data/.archinstall ]] ; then
-    . /mnt/data/.archinstall
+  CIDATA_DIR=/mnt/cidata
+  mkdir -p ${CIDATA_DIR}
+  mount -L CIDATA ${CIDATA_DIR}
+  if [[ -f ${CIDATA_DIR}/.archinstall ]] ; then
+    . ${CIDATA_DIR}/.archinstall
   fi
 
   while getopts "DNc:d:h" option; do
