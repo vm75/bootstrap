@@ -112,7 +112,7 @@ parition_drive() {
 
 setup_bridge() {
   interface=$(nmcli device | grep ethernet -m 1 | sort | awk '{print $1}')
-  uuid=$(nmcli con show -f UUID,TYPE | grep ethernet -m 1 | sort | awk '{print $1}')
+  uuid=$(nmcli -f UUID,TYPE con show | grep ethernet -m 1 | sort | awk '{print $1}')
   if [[ -z ${ETH_IP} ]]; then
     ip=$(ip -4 a show dev ${interface} | grep inet -m 1 | awk '{print $2}')
   else
