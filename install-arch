@@ -152,10 +152,48 @@ setup_wifi() {
   sudo nmcli con up ${interface}
 }
 
-setup_data_drive() {
+parition_data_drive() {
+  if [[ ! -b ${DATA_DRIVE}1 && ! -b ${DATA_DRIVE}p1 ]] ; then
+    # create partition
+    (
+      echo g   # Create a new empty GPT partition table
+      echo n   # Add a new partition
+      echo     # Auto-select partition number
+      echo     # Auto-select partition start
+      echo     # Auto-select partition end
+
+      echo w      # Write changes
+    ) | fdisk -W always ${DATA_DRIVE}
+    checkError "partitioning ${DATA_DRIVE}"
+    if [[ -b ${DATA_DRIVE}1 ]] ; then
+      DATA_PART=${DATA_DRIVE}1
+    elif [[ -b ${DATA_DRIVE}p1 && -b ${DATA_DRIVE}p2 ]] ; then
+      DATA_PART=${DATA_DRIVE}p1
+    else
+      error "Error detecting partitions"
+    fi
+
+    mkfs.btrfs -L ${hostname} -f ${DATA_PART}
+    checkError "formatting data drive"
+  else
+    if [[ -b ${DATA_DRIVE}1 ]] ; then
+      DATA_PART=${DATA_DRIVE}1
+    elif [[ -b ${DATA_DRIVE}p1 && -b ${DATA_DRIVE}p2 ]] ; then
+      DATA_PART=${DATA_DRIVE}p1
+    fi
+  fi
+
   mkdir -p /mnt/userdata
-  sudo mount ${DATA_DRIVE} /mnt/userdata
+  mount -t btrfs ${DATA_PART} /mnt/userdata
   checkError "mounting data drive"
+
+  btrfs subv create /mnt/userdata/@home
+  btrfs subv create /mnt/userdata/@vms
+  btrfs subv create /mnt/userdata/@library
+}
+
+setup_data_drive() {
+  mount_data_drive
 
   uuid=$(blkid ${DATA_DRIVE} -o value -s UUID)
   for vol in $(btrfs subv list /mnt/userdata | awk '{print $9}') ; do
