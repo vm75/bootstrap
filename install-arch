@@ -193,7 +193,7 @@ arch_install() {
   USER_HOME=/mnt/archinstall/home/${USERNAME}
   if [[ -d ${USER_FILES} ]] ; then
     cp -ar "${USER_FILES}/." ${USER_HOME}
-  elif ($(file "${USER_FILES}") | grep -q compressed) ; then
+  elif $(file "${USER_FILES}" | grep -q compressed) ; then
     cd ${USER_HOME}
     tar xf "${USER_FILES}"
     cd -
@@ -208,7 +208,6 @@ arch_install() {
   fi
 
   # ownership and permission
-  chown -R ${USERNAME}:${USERNAME} ${USER_HOME}
   if [[ -d ${USER_HOME}/.ssh ]] ; then
     chmod 700 ${USER_HOME}/.ssh
     chmod 600 ${USER_HOME}/.ssh/*
@@ -234,7 +233,10 @@ install_yay() {
 post_install() {
   echo "Running post_install as ${USER}"
 
+  export HOME=/home/${USERNAME}
   cd ${HOME}
+
+  sudo chown -R ${USER}:${USER} ${HOME}
 
   # crontab
   systemctl enable cronie
