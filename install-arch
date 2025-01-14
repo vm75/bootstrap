@@ -157,9 +157,6 @@ arch_install() {
 
   cd ${BOOTSTRAP_DIR}
 
-  mkdir -p /mnt/data
-  mount -L CIDATA /mnt/data
-
   # network
   if [[ -z ${SKIP_NETWORK} ]] ; then
     pacman -Sy --noconfirm networkmanager
@@ -220,18 +217,7 @@ arch_install() {
   # post install
   arch-chroot -u ${USERNAME} /mnt/archinstall mkdir -p /home/${USERNAME}/.local/share
   arch-chroot -u ${USERNAME} /mnt/archinstall git clone https://github.com/vm75/bootstrap.git /home/${USERNAME}/.local/share/bootstrap
-
-  arch-chroot /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap/install-arch --post-install
   arch-chroot -u ${USERNAME} /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap/install-arch --post-install
-
-  # wait 5 seconds
-  sleep 5
-
-  # unmount
-  umount ${BOOT_PART}
-  for dev in $(mount | grep "${ROOT_PART} " | awk '{print $1}') ; do
-    umount ${dev}
-  done
 }
 
 install_yay() {
