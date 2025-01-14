@@ -81,32 +81,32 @@ parition_drive() {
     mkfs.fat -F32 ${BOOT_PART}
     mkfs.btrfs -L ${hostname} -f ${ROOT_PART}
 
-    mount -t btrfs ${ROOT_PART} /mnt/archinstall
+    mount -t btrfs ${ROOT_PART} ${MOUNT_DIR}
 
-    btrfs subv create /mnt/archinstall/@
-    btrfs subv create /mnt/archinstall/@home
-    btrfs subv create /mnt/archinstall/@log
-    btrfs subv create /mnt/archinstall/@pkg
-    btrfs subv create /mnt/archinstall/@.snapshots
+    btrfs subv create ${MOUNT_DIR}/@
+    btrfs subv create ${MOUNT_DIR}/@home
+    btrfs subv create ${MOUNT_DIR}/@log
+    btrfs subv create ${MOUNT_DIR}/@pkg
+    btrfs subv create ${MOUNT_DIR}/@.snapshots
 
-    mkdir -p /mnt/archinstall/@/var/lib
+    mkdir -p ${MOUNT_DIR}/@/var/lib
 
-    btrfs subv create /mnt/archinstall/@/var/lib/portables
-    btrfs subv create /mnt/archinstall/@/var/lib/machines
+    btrfs subv create ${MOUNT_DIR}/@/var/lib/portables
+    btrfs subv create ${MOUNT_DIR}/@/var/lib/machines
 
-    btrfs subv list /mnt/archinstall/
+    btrfs subv list ${MOUNT_DIR}/
 
-    umount /mnt/archinstall
+    umount ${MOUNT_DIR}
 
-    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@ ${ROOT_PART} /mnt/archinstall
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@ ${ROOT_PART} ${MOUNT_DIR}
 
-    mkdir -p /mnt/archinstall/home /mnt/archinstall/var/log /mnt/archinstall/var/cache/pacman/pkg /mnt/archinstall/.snapshots /mnt/archinstall/boot
+    mkdir -p ${MOUNT_DIR}/home ${MOUNT_DIR}/var/log ${MOUNT_DIR}/var/cache/pacman/pkg ${MOUNT_DIR}/.snapshots ${MOUNT_DIR}/boot
 
-    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@home ${ROOT_PART} /mnt/archinstall/home
-    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@log ${ROOT_PART} /mnt/archinstall/var/log
-    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@pkg ${ROOT_PART} /mnt/archinstall/var/cache/pacman/pkg
-    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@.snapshots ${ROOT_PART} /mnt/archinstall/.snapshots
-    mount -t vfat -o rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro ${BOOT_PART} /mnt/archinstall/boot
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@home ${ROOT_PART} ${MOUNT_DIR}/home
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@log ${ROOT_PART} ${MOUNT_DIR}/var/log
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@pkg ${ROOT_PART} ${MOUNT_DIR}/var/cache/pacman/pkg
+    mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@.snapshots ${ROOT_PART} ${MOUNT_DIR}/.snapshots
+    mount -t vfat -o rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro ${BOOT_PART} ${MOUNT_DIR}/boot
   fi
 }
 
@@ -152,6 +152,24 @@ setup_wifi() {
   sudo nmcli con up ${interface}
 }
 
+setup_data_drive() {
+  mkdir -p /mnt/userdata
+  sudo mount ${DATA_DRIVE} /mnt/userdata
+  checkError "mounting data drive"
+
+  uuid=$(blkid ${DATA_DRIVE} -o value -s UUID)
+  for vol in $(btrfs subv list /mnt/userdata | awk '{print $9}') ; do
+    # if vol start with @
+    if [[ "${vol}" == "@"* ]] ; then
+      mkdir -p ${MOUNT_DIR}/home/${USERNAME}/${vol#\@}
+      echo "UUID=${uuid} /home/${USERNAME}/${vol#\@} btrfs rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/${vol},nofail 0 0" >> ${MOUNT_DIR}/etc/fstab
+    else
+      mkdir -p ${MOUNT_DIR}/${vol}
+      echo "UUID=${uuid} /${vol} btrfs rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/${vol},nofail 0 0" >> ${MOUNT_DIR}/etc/fstab
+    fi
+  done
+}
+
 arch_install() {
   # log
   LOG_FILE=~/${SCRIPTNAME}.log
@@ -175,14 +193,16 @@ arch_install() {
   archinstall --config /tmp/user_configuration.json --creds /tmp/user_credentials.json --silent
   checkError "archinstall"
 
+  MOUNT_DIR=/mnt/archinstall
+
   # sudo
   mkdir -p /etc/sudoers.d
-  echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > /mnt/archinstall/etc/sudoers.d/00_${USERNAME}
+  echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > ${MOUNT_DIR}/etc/sudoers.d/00_${USERNAME}
 
   # copy files
-  cp /etc/pacman.d/mirrorlist /mnt/archinstall/etc/pacman.d/mirrorlist
+  cp /etc/pacman.d/mirrorlist ${MOUNT_DIR}/etc/pacman.d/mirrorlist
 
-  USER_HOME=/mnt/archinstall/home/${USERNAME}
+  USER_HOME=${MOUNT_DIR}/home/${USERNAME}
   if [[ -d ${USER_FILES} ]] ; then
     cp -ar "${USER_FILES}/." ${USER_HOME}
   elif $(file "${USER_FILES}" | grep -q compressed) ; then
@@ -206,9 +226,9 @@ arch_install() {
   fi
 
   # post install
-  mkdir -p /mnt/archinstall/home/${USERNAME}/.local/share
-  cp -a ../bootstrap /mnt/archinstall/home/${USERNAME}/.local/share/bootstrap
-  arch-chroot -u ${USERNAME} /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap/install-arch --post-install
+  mkdir -p ${USER_HOME}/.local/share
+  cp -a ../bootstrap ${USER_HOME}/.local/share/bootstrap
+  arch-chroot -u ${USERNAME} ${MOUNT_DIR} /home/${USERNAME}/.local/share/bootstrap/install-arch --post-install
 
   # network
   if [[ -z ${SKIP_NETWORK} ]] ; then
@@ -216,8 +236,13 @@ arch_install() {
     systemctl start NetworkManager
     setup_bridge
     setup_wifi
-    mkdir -p /mnt/archinstall/etc/NetworkManager/system-connections
-    cp /etc/NetworkManager/system-connections/* /mnt/archinstall/etc/NetworkManager/system-connections/
+    mkdir -p ${MOUNT_DIR}/etc/NetworkManager/system-connections
+    cp /etc/NetworkManager/system-connections/* ${MOUNT_DIR}/etc/NetworkManager/system-connections/
+  fi
+
+  # data-drive
+  if [[ -n ${DATA_DRIVE} ]] ; then
+    setup_data_drive
   fi
 }
 
@@ -262,14 +287,34 @@ post_install() {
   # user
   sudo usermod -aG wheel,audio ${USER}
 
-  # shenv
-  if [[ -f ${HOME}/.gitconfig ]] ; then
-    git clone https://github.com/vm75/shenv.git ${HOME}/.local/share/shenv
-    ${HOME}/.local/share/shenv/bin/shenv
-  fi
-
   # aur services
   systemctl --user enable rc-local.service
+
+  # packages
+  if [[ -n ${PACKAGES} ]] ; then
+    yay -Sy --needed --noconfirm ${PACKAGES}
+  fi
+
+  # services
+  if [[ -n ${SERVICES} ]] ; then
+    sudo systemctl enable ${SERVICES}
+  fi
+
+  # user services
+  if [[ -n ${USER_SERVICES} ]] ; then
+    systemctl --user enable ${USER_SERVICES}
+  fi
+
+  # shenv
+  if [[ -f ${HOME}/.gitconfig.vm75 ]] ; then
+    git clone https://github.com/vm75/shenv.git ${HOME}/.local/share/shenv
+    ${HOME}/.local/share/shenv/bin/shenv
+
+    # features
+    if [[ -n ${FEATURES} ]] ; then
+      ${HOME}/.local/share/shenv/bin/os install ${FEATURES}
+    fi
+  fi
 
   exit 0
 }
