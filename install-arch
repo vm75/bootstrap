@@ -152,7 +152,7 @@ setup_wifi() {
   sudo nmcli con up ${interface}
 }
 
-parition_data_drive() {
+mount_data_drive() {
   if [[ ! -b ${DATA_DRIVE}1 && ! -b ${DATA_DRIVE}p1 ]] ; then
     # create partition
     (
@@ -173,7 +173,7 @@ parition_data_drive() {
       error "Error detecting partitions"
     fi
 
-    mkfs.btrfs -L ${hostname} -f ${DATA_PART}
+    mkfs.btrfs -L data -f ${DATA_PART}
     checkError "formatting data drive"
   else
     if [[ -b ${DATA_DRIVE}1 ]] ; then
@@ -195,7 +195,7 @@ parition_data_drive() {
 setup_data_drive() {
   mount_data_drive
 
-  uuid=$(blkid ${DATA_DRIVE} -o value -s UUID)
+  uuid=$(blkid ${DATA_PART} -o value -s UUID)
   for vol in $(btrfs subv list /mnt/userdata | awk '{print $9}') ; do
     # if vol start with @
     if [[ "${vol}" == "@"* ]] ; then
