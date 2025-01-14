@@ -221,7 +221,7 @@ arch_install() {
 
   # post install
   arch-chroot -u ${USERNAME} /mnt/archinstall mkdir -p /home/${USERNAME}/.local/share
-  arch-chroot -u ${USERNAME} /mnt/archinstall git clone https://github.com/vm75/bootstrap.git /home/${USERNAME}/.local/share/bootstrap
+  cp -a ${BOOTSTRAP_DIR} /home/${USERNAME}/.local/share/bootstrap
   arch-chroot -u ${USERNAME} /mnt/archinstall /home/${USERNAME}/.local/share/bootstrap/install-arch --post-install
 }
 
