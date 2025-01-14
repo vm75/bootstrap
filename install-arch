@@ -132,6 +132,8 @@ setup_bridge() {
   sudo nmcli con mod br0 ipv6.method ignore
   sudo nmcli con up br0
   sudo nmcli con up ${interface}-slave
+
+  sleep 5
 }
 
 setup_wifi() {
@@ -148,6 +150,10 @@ setup_wifi() {
   if [[ -n "${WIFI_IP}" ]]; then
     sudo nmcli con mod ${interface} ipv4.addresses "${WIFI_IP}"
   fi
+
+  sudo nmcli con up ${interface}
+
+  sleep 5
 }
 
 arch_install() {
@@ -197,7 +203,7 @@ arch_install() {
     cd ${USER_HOME}
     tar xf "${USER_FILES}"
     cd -
-  else
+  elif [[ -f ${USER_FILES} ]] ; then
     cp -a "${USER_FILES}" ${USER_HOME}
   fi
 
