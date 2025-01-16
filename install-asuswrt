@@ -6,12 +6,12 @@ error() {
 }
 
 init_asuswrt() {
-  export ENTWARE_ROOT=$(ls -d /tmp/mnt/*/entware)
-  export HOME=${ENTWARE_ROOT}/home
+  export HOME=/opt/home/${USER}
+  export ETC=/opt/etc
 
   opkg update
   opkg upgrade
-  opkg install bash vim-full git git-http htop rsync dropbearconvert nginx coreutils-mktemp coreutils-stat procps-ng-pkill
+  opkg install bash vim-full git git-http htop rsync dropbearconvert nginx coreutils-id coreutils-mktemp coreutils-stat procps-ng-pkill shadow screen
 
   echo "dbclient -y -i ${HOME}/.ssh/id_rsa \$*" > ${HOME}/.gitssh.sh
   chmod +x ${HOME}/.gitssh.sh
@@ -24,7 +24,17 @@ init_asuswrt() {
   echo -e "[ -f /opt/bin/bash ] && exec /opt/bin/bash" >> ${profileAdd}
   echo -e "# bash-end" >> ${profileAdd}
 
-  sed -e "s/started.'/started.' \&/" -i ${ENTWARE_ROOT}/etc/init.d/S80nginx
+  # UID=1000
+  # echo "${USER}:x:${UID}:${UID}::/home/${USER}:/usr/bin/bash" > /jffs/configs/passwd.add
+  # echo "${USER}:*:0:0:99999:7:0:0:" > /jffs/configs/shadow.add
+  # echo "${USER}:x:${UID}:" > /jffs/configs/group.add
+  # echo "${USER}:x::" > /jffs/configs/gshadow.add
+
+  # mkdir -p ${HOME}/.config/certs
+
+  # echo "${HOME}/.config/certs *" > /jffs/configs/exports.add
+
+  sed -e "s/started.'/started.' \&/" -i ${ETC}/init.d/S80nginx
 }
 
 setup_ssh() {
