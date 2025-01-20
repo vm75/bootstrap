@@ -65,6 +65,8 @@ init_asuswrt() {
 
   # export certs
   mkdir -p ${HOME}/.certs
+
+  # export home using samba
   echo "${SAMBA_EXPORTS}" > /jffs/configs/smb.conf.add
 
   # fix nginx start
