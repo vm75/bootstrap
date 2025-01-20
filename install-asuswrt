@@ -5,24 +5,57 @@ error() {
   exit ${2:-1}
 }
 
+USER_PROFILE=$(cat << END
+#!/usr/bin/env sh
+
+export HOME=/opt/home/${USER}
+cd \${HOME}
+
+# bash-start
+[ -f /opt/bin/bash ] && exec /opt/bin/bash
+# bash-end
+END
+)
+
+SAMBA_EXPORTS=$(cat << END
+[certs]
+comment = Certificates
+path = /opt/home/${USER}/.certs
+dos filetimes = yes
+fake directory create times = yes
+valid users = ${USER}
+invalid users =
+read list = ${USER}
+write list =
+END
+)
+
 init_asuswrt() {
   export HOME=/opt/home/${USER}
   export ETC=/opt/etc
 
+  # setup ssh
+  mkdir -p -m 700 ${HOME}/.ssh
+  cp /tmp/home/root/.ssh/* ${HOME}/.ssh
+  read -s "Copied keys to ${HOME}/.ssh?" answer < /dev/tty ; echo
+  if [ ${answer} != y* ] ; then
+    setup_ssh
+  fi
+  chmod 600 ${HOME}/.ssh/*
+
   opkg update
   opkg upgrade
-  opkg install bash vim-full vim-runtime git git-http htop rsync dropbearconvert nginx coreutils-id coreutils-mktemp coreutils-stat procps-ng-pkill shadow screen btrfs-progs iptables
+  opkg install bash vim-full vim-runtime git git-http htop rsync dropbearconvert python3 \
+    nginx coreutils-id coreutils-mktemp coreutils-stat procps-ng-pkill shadow screen iptables lsblk fdisk file
 
+  # fix git ssh
   echo "dbclient -y -i ${HOME}/.ssh/id_rsa \$*" > ${HOME}/.gitssh.sh
   chmod +x ${HOME}/.gitssh.sh
   export GIT_SSH=${HOME}/.gitssh.sh
 
-  profileAdd=/jffs/configs/profile.add
-  echo -e '#!/usr/bin/env sh\n' > ${profileAdd}
-  echo -e "export HOME=${HOME}\ncd \${HOME}\n" >> ${profileAdd}
-  echo -e "# bash-start" >> ${profileAdd}
-  echo -e "[ -f /opt/bin/bash ] && exec /opt/bin/bash" >> ${profileAdd}
-  echo -e "# bash-end" >> ${profileAdd}
+  # reroute home
+  echo "${USER_PROFILE}" > ${HOME}/.profile
+  echo -e "[ -f /opt/home/${USER}/.profile ] && . /opt/home/${USER}/.profile # UserProfile" >> /jffs/configs/profile.add
 
   # UID=1000
   # echo "${USER}:x:${UID}:${UID}::/home/${USER}:/usr/bin/bash" > /jffs/configs/passwd.add
@@ -30,10 +63,11 @@ init_asuswrt() {
   # echo "${USER}:x:${UID}:" > /jffs/configs/group.add
   # echo "${USER}:x::" > /jffs/configs/gshadow.add
 
-  # mkdir -p ${HOME}/.config/certs
+  # export certs
+  mkdir -p ${HOME}/.certs
+  echo "${SAMBA_EXPORTS}" > /jffs/configs/smb.conf.add
 
-  # echo "${HOME}/.config/certs *" > /jffs/configs/exports.add
-
+  # fix nginx start
   sed -e "s/started.'/started.' \&/" -i ${ETC}/init.d/S80nginx
 }
 
@@ -60,19 +94,23 @@ setup_shenv() {
     return
   fi
 
-  read -s -p "Enter github token? " GITHUB_TOKEN < /dev/tty ; echo
   mkdir -p ~/.local/share
-  cd ~/.local/share
-  git clone --recurse-submodules -c core.symlinks=true git@github.com:vm75/shenv.git
+  export GIT_SSH=~/.gitssh.sh
+  git clone --recurse-submodules -c core.symlinks=true git@github.com:vm75/shenv.git ~/.local/share/shenv
   [ $? -ne 0 ] && error "Error cloning shenv repo." $?
 
-  ~/.local/share/shenv/bin/shenv -i -p ${GITHUB_TOKEN:-mytoken}
+  ~/.local/share/shenv/bin/shenv
 }
 
 main() {
   init_asuswrt
   setup_ssh
   setup_shenv
+  . ${HOME}/.shenvrc
+
+  # install apps
+  os -i vaultwarden wireguard
+
   echo "All set!"
 }
 
