@@ -45,8 +45,9 @@ init_asuswrt() {
 
   opkg update
   opkg upgrade
-  opkg install bash vim-full vim-runtime git git-http htop rsync dropbearconvert python3 \
-    nginx coreutils-id coreutils-mktemp coreutils-stat procps-ng-pkill shadow screen iptables lsblk fdisk file
+  opkg install bash libncursesw vim-full vim-runtime git git-http locales htop dropbearconvert python3 nginx \
+    findutils tar rsync gzip coreutils coreutils-dd coreutils-id coreutils-mktemp coreutils-stat coreutils-whoami coreutils-mkfifo \
+    procps-ng-pkill shadow screen iptables lsblk fdisk file samba4-utils
 
   # fix git ssh
   echo "dbclient -y -i ${HOME}/.ssh/id_rsa \$*" > ${HOME}/.gitssh.sh
@@ -65,6 +66,11 @@ init_asuswrt() {
 
   # export certs
   mkdir -p ${HOME}/.certs
+
+  # sudo
+  mkdir -m ${HOME}/.local/bin
+  echo -e '!/bin/sh\n"$@"' > ${HOME}/.local/bin/sudo
+  chmod +x ${HOME}/.local/bin/sudo
 
   # export home using samba
   echo "${SAMBA_EXPORTS}" > /jffs/configs/smb.conf.add
