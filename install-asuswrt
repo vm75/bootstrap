@@ -65,7 +65,8 @@ init_asuswrt() {
   # echo "${USER}:x::" > /jffs/configs/gshadow.add
 
   # export certs
-  mkdir -p ${HOME}/.certs
+  mkdir -p ${HOME}/.certs/acme-challenge
+  ln -s ${HOME}/.certs/acme-challenge /opt/acme-challenge
 
   # sudo
   mkdir -m ${HOME}/.local/bin
