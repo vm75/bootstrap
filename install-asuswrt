@@ -45,7 +45,7 @@ init_asuswrt() {
 
   opkg update
   opkg upgrade
-  opkg install bash libncursesw vim-full vim-runtime git git-http locales htop dropbearconvert python3 nginx \
+  opkg install bash libncursesw vim-full vim-runtime git git-http locales htop dropbearconvert python3 nginx curl jq \
     findutils tar rsync gzip coreutils coreutils-dd coreutils-id coreutils-mktemp coreutils-stat coreutils-whoami coreutils-mkfifo \
     procps-ng-pkill shadow screen iptables lsblk fdisk file samba4-utils
 
