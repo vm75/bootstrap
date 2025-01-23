@@ -311,8 +311,8 @@ post_install() {
 
   sudo chown -R ${USER}:${USER} ${HOME}
 
-  # crontab
-  sudo systemctl enable cronie
+  # crontab (for user)
+  systemctl enable cronie
 
   # sshd
   sudo systemctl enable sshd.service
