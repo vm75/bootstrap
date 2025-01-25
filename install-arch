@@ -370,7 +370,7 @@ post_install() {
 
   # install aur apps
   echo "Installing aur apps: cpulimit, ntfsprogs-ntfs3..."
-  yay -Sy --needed --noconfirm cpulimit ntfsprogs-ntfs3 # udevil rc-local
+  yay -Sy --needed --noconfirm cpulimit ntfsprogs-ntfs3 rc-local # udevil
 
   # vi
   echo "Setting up vi as vim"
