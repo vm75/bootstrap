@@ -36,19 +36,28 @@ usage() {
 
 setup_mirrors() {
   # update
+  echo "Installing reflector..."
   pacman -Sy --noconfirm --needed reflector archlinux-keyring
-  checkError "initializing pacman"
+  checkError "installing reflector"
 
   # set mirrors
-  echo "Setting up reflectors..."
+  echo "Setting up mirrors..."
   if [[ ! -f /etc/pacman.d/mirrorlist ]] ; then
     reflector -c "${COUNTRIES}" -f 12 -l 10 -n 12 --save /etc/pacman.d/mirrorlist
-    checkError "setting reflectors"
+    checkError "setting mirrors"
   fi
 }
 
 parition_drive() {
+  # confirm install to drive
+  read -p "${DRIVE} will be wiped. Continue? (y/n) " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]] ; then
+    exit 1
+  fi
+
   # create partition
+  echo "Partitioning ${DRIVE}: 1 EFI and 1 root..."
   (
     echo g   # Create a new empty GPT partition table
     echo n   # Add a new partition
@@ -78,11 +87,16 @@ parition_drive() {
       error "Error detecting partitions"
     fi
 
+    echo "Formatting boot partition (fat32): ${BOOT_PART}"
     mkfs.fat -F32 ${BOOT_PART}
+
+    echo "Formatting root partition (btrfs): ${ROOT_PART}"
     mkfs.btrfs -L ${hostname} -f ${ROOT_PART}
 
+    echo "Mounting root partition: ${ROOT_PART} -> ${MOUNT_DIR}"
     mount -t btrfs ${ROOT_PART} ${MOUNT_DIR}
 
+    echo "Creating subvolumes: /@,/@home,/@log,/@pkg,/@.snapshots..."
     btrfs subv create ${MOUNT_DIR}/@
     btrfs subv create ${MOUNT_DIR}/@home
     btrfs subv create ${MOUNT_DIR}/@log
@@ -91,6 +105,7 @@ parition_drive() {
 
     mkdir -p ${MOUNT_DIR}/@/var/lib
 
+    echo "Creating subvolumes: var/lib/portables,var/lib/machines..."
     btrfs subv create ${MOUNT_DIR}/@/var/lib/portables
     btrfs subv create ${MOUNT_DIR}/@/var/lib/machines
 
@@ -98,10 +113,13 @@ parition_drive() {
 
     umount ${MOUNT_DIR}
 
+    echo "Mounting root partition: ${ROOT_PART} -> ${MOUNT_DIR}"
     mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@ ${ROOT_PART} ${MOUNT_DIR}
 
+    echo "Creating directories: /home, /var/log, /var/cache/pacman/pkg, /.snapshots, /boot..."
     mkdir -p ${MOUNT_DIR}/home ${MOUNT_DIR}/var/log ${MOUNT_DIR}/var/cache/pacman/pkg ${MOUNT_DIR}/.snapshots ${MOUNT_DIR}/boot
 
+    echo "Mounting subvolumes: /@home, /@log, /@pkg, /@.snapshots, /boot..."
     mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@home ${ROOT_PART} ${MOUNT_DIR}/home
     mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@log ${ROOT_PART} ${MOUNT_DIR}/var/log
     mount -t btrfs -o rw,relatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvol=/@pkg ${ROOT_PART} ${MOUNT_DIR}/var/cache/pacman/pkg
@@ -123,6 +141,7 @@ setup_bridge() {
     return
   fi
 
+  echo "Setting up bridge: ${interface}"
   sudo nmcli con mod ${uuid} ifname ${interface} con-name ${interface}
   sudo nmcli con add type bridge ifname br0 con-name br0
   sudo nmcli con add type bridge-slave ifname ${interface} master br0 con-name ${interface}-slave
@@ -131,6 +150,8 @@ setup_bridge() {
   fi
   sudo nmcli con mod br0 ipv6.method ignore
   sudo nmcli con up br0
+
+  echo "Bring up interface: ${interface}-slave"
   sudo nmcli con up ${interface}-slave
 }
 
@@ -142,6 +163,7 @@ setup_wifi() {
 
   psk=$(wpa_passphrase "${WIFI_SSID}" "${WIFI_PASSWORD}" | grep -e "\spsk" | cut -d= -f2)
 
+  echo "Setting up wifi: ${interface}"
   sudo nmcli con add type wifi ifname ${interface} ssid "${WIFI_SSID}" con-name ${interface}
   sudo nmcli con mod ${interface} wifi-sec.key-mgmt wpa-psk wifi-sec.psk "${psk}"
 
@@ -149,12 +171,14 @@ setup_wifi() {
     sudo nmcli con mod ${interface} ipv4.addresses "${WIFI_IP}"
   fi
 
+  echo "Bring up interface: ${interface}"
   sudo nmcli con up ${interface}
 }
 
 mount_data_drive() {
   if [[ ! -b ${DATA_DRIVE}1 && ! -b ${DATA_DRIVE}p1 ]] ; then
     # create partition
+    echo "Partitioning ${DATA_DRIVE}..."
     (
       echo g   # Create a new empty GPT partition table
       echo n   # Add a new partition
@@ -173,6 +197,7 @@ mount_data_drive() {
       error "Error detecting partitions"
     fi
 
+    echo "Formatting data partition (btrfs): ${DATA_PART}..."
     mkfs.btrfs -L data -f ${DATA_PART}
     checkError "formatting data drive"
   else
@@ -185,9 +210,12 @@ mount_data_drive() {
 
   DATA_DIR=/mnt/data
   mkdir -p ${DATA_DIR}
+
+  echo "Mounting data partition: ${DATA_PART} -> ${DATA_DIR}..."
   mount -t btrfs ${DATA_PART} ${DATA_DIR}
   checkError "mounting data drive"
 
+  echo "Creating subvolumes: /@home,/@vms,/@library..."
   btrfs subv create ${DATA_DIR}/@home
   btrfs subv create ${DATA_DIR}/@vms
   btrfs subv create ${DATA_DIR}/@library
@@ -197,6 +225,7 @@ setup_data_drive() {
   mount_data_drive
 
   uuid=$(blkid ${DATA_PART} -o value -s UUID)
+  echo "Setting up fstab for data drive..."
   for vol in $(btrfs subv list ${DATA_DIR} | awk '{print $9}') ; do
     # if vol start with @
     if [[ "${vol}" == "@"* ]] ; then
@@ -228,6 +257,8 @@ arch_install() {
   # partition and format target drive
   parition_drive
 
+  echo "Copying configuration files..."
+
   PART_SIZE=$(fdisk -l ${DRIVE} | tail -1 | awk '{print $4 * 512}')
   cp -f user_configuration.tpl.json /tmp/user_configuration.json
   sed -e "s#DEV#${DRIVE}#g" -e "s#PART_SIZE#${PART_SIZE}#g" -e "s#HOSTNAME#${HOSTNAME}#g" -i /tmp/user_configuration.json
@@ -235,18 +266,22 @@ arch_install() {
   cp -f user_credentials.tpl.json /tmp/user_credentials.json
   sed -e "s#PASSWORD#${PASSWORD}#g" -e "s#USERNAME#${USERNAME}#g" -i /tmp/user_credentials.json
 
+  echo "Running archinstall..."
   archinstall --config /tmp/user_configuration.json --creds /tmp/user_credentials.json --silent
   checkError "archinstall"
 
   MOUNT_DIR=/mnt/archinstall
 
   # sudo
+  echo "Enabling sudo for user ${USERNAME}"
   mkdir -p /etc/sudoers.d
   echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > ${MOUNT_DIR}/etc/sudoers.d/00_${USERNAME}
 
   # copy files
+  echo "Copying pacman mirror list..."
   cp /etc/pacman.d/mirrorlist ${MOUNT_DIR}/etc/pacman.d/mirrorlist
 
+  echo "Copying user files..."
   USER_HOME=${MOUNT_DIR}/home/${USERNAME}
   if [[ -d ${USER_FILES} ]] ; then
     cp -ar "${USER_FILES}/." ${USER_HOME}
@@ -259,6 +294,7 @@ arch_install() {
   fi
 
   # ssh key
+  echo "Setting up ssh..."
   if [[ -n ${SSH_KEY} ]] ; then
     mkdir -p ${USER_HOME}/.ssh
     echo "${SSH_KEY}" >> ${USER_HOME}/.ssh/authorized_keys
@@ -270,13 +306,19 @@ arch_install() {
     chmod 600 ${USER_HOME}/.ssh/*
   fi
 
+  if [[ -n ${SKIP_POST_INSTALL} ]] ; then
+    return
+  fi
+
   # post install
   mkdir -p ${USER_HOME}/.local/share
   cp -a ../bootstrap ${USER_HOME}/.local/share/bootstrap
+  echo "Running post install..."
   arch-chroot -u ${USERNAME} ${MOUNT_DIR} /home/${USERNAME}/.local/share/bootstrap/install-arch --post-install
 
   # network
   if [[ -z ${SKIP_NETWORK} ]] ; then
+    echo "Setting up network..."
     pacman -Sy --noconfirm networkmanager
     systemctl start NetworkManager
     setup_bridge
@@ -286,15 +328,20 @@ arch_install() {
   fi
 
   # data-drive
-  if [[ -n ${DATA_DRIVE} ]] ; then
+  if [[ -n ${DATA_DRIVE} && -b ${DATA_DRIVE} ]] ; then
     setup_data_drive
   fi
 }
 
 install_yay() {
+  # key for aur
+  echo "Adding key for aur"
+  sudo gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
+
   mkdir -p .aur
   cd .aur
 
+  echo "Installing yay..."
   git clone https://aur.archlinux.org/yay.git
   cd yay
   makepkg -si --noconfirm
@@ -312,51 +359,59 @@ post_install() {
   sudo chown -R ${USER}:${USER} ${HOME}
 
   # crontab (for user)
+  echo "Enabling crontab for user ${USER}"
   systemctl enable cronie
 
   # sshd
+  echo "Enabling sshd"
   sudo systemctl enable sshd.service
-
-  # key for aur
-  sudo gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
 
   install_yay
 
   # install aur apps
-  yay -Sy --needed --noconfirm udevil rc-local cpulimit ntfsprogs-ntfs3
+  echo "Installing aur apps: cpulimit, ntfsprogs-ntfs3..."
+  yay -Sy --needed --noconfirm cpulimit ntfsprogs-ntfs3 # udevil rc-local
 
   # vi
+  echo "Setting up vi as vim"
   sudo rm -f /usr/bin/vi
   sudo ln -s /usr/bin/vim /usr/bin/vi
 
   # user
+  echo "Adding group wheel and audio to user ${USER}"
   sudo usermod -aG wheel,audio ${USER}
 
   # aur services
+  echo "Enabling rc-local service for user ${USER}"
   systemctl --user enable rc-local.service
 
   # packages
   if [[ -n ${PACKAGES} ]] ; then
+    echo "Installing additional packages: ${PACKAGES}"
     yay -Sy --needed --noconfirm ${PACKAGES}
   fi
 
   # services
   if [[ -n ${SERVICES} ]] ; then
+    echo "Enabling additional services: ${SERVICES}"
     sudo systemctl enable ${SERVICES}
   fi
 
   # user services
   if [[ -n ${USER_SERVICES} ]] ; then
+    echo "Enabling additional user services: ${USER_SERVICES}"
     systemctl --user enable ${USER_SERVICES}
   fi
 
   # shenv
   if [[ -f ${HOME}/.gitconfig.vm75 ]] ; then
+    echo "Setting up shenv"
     git clone --recurse-submodules git@github.com:vm75/shenv.git ${HOME}/.local/share/shenv
     ${HOME}/.local/share/shenv/bin/shenv
 
     # features
     if [[ -n ${FEATURES} ]] ; then
+      echo "Installing additional features: ${FEATURES}"
       ${HOME}/.local/share/shenv/bin/os install ${FEATURES}
     fi
   fi
@@ -369,14 +424,27 @@ main() {
     post_install
   fi
 
+  echo "Mounting CIDATA..."
   CIDATA_DIR=/mnt/cidata
   mkdir -p ${CIDATA_DIR}
   mount -L CIDATA ${CIDATA_DIR}
-  if [[ -f ${CIDATA_DIR}/.archinstall ]] ; then
-    . ${CIDATA_DIR}/.archinstall
+  checkError "mounting CIDATA"
+
+  install_configs=(${CIDATA_DIR}/archinstall.*.conf)
+  echo "Select an install config to use:"
+  for i in "${!install_configs[@]}"; do
+    echo "$((i + 1))) ${install_configs[i]}"
+  done
+  read -p "Enter the number of the config to use (0 to continue with defaults): " choice
+  if ! [[ ${choice} =~ ^[0-9]+$ ]] || [[ ${choice} -lt 0 ]] || [[ ${choice} -gt ${#install_configs[@]} ]]; then
+    echo "Invalid selection. Exiting."
+    exit 1
+  fi
+  if [[ ${choice} -ne 0 ]] ; then
+    CONFIG_FILE=${install_configs[$((choice - 1))]}
   fi
 
-  while getopts "DNc:d:h" option; do
+  while getopts "DNPc:d:h" option; do
     case "${option}" in
     D)
       set -x
@@ -384,17 +452,20 @@ main() {
     N)
       SKIP_NETWORK=1
       ;;
+    P)
+      SKIP_POST_INSTALL=1
+      ;;
     c)
       if [[ ! -f ${OPTARG} ]] ; then
         error "Invalid config file ${OPTARG}"
       fi
-      . ${OPTARG}
+      CONFIG_FILE=${OPTARG}
       ;;
     d)
       if [[ -b /dev/${OPTARG} ]] ; then
-        DRIVE="/dev/${OPTARG}"
+        DRIVE_OVERRIDE="/dev/${OPTARG}"
       elif [[ -b ${OPTARG} ]] ; then
-        DRIVE=${OPTARG}
+        DRIVE_OVERRIDE=${OPTARG}
       else
         error "Invalid drive ${OPTARG}"
       fi
@@ -407,7 +478,14 @@ main() {
   done
   shift $((OPTIND-1))
 
-  if [[ -z ${DRIVE} ]] ; then
+  # load config
+  [[ -z ${CONFIG_FILE} ]] && error "No config file specified"
+  . ${CONFIG_FILE}
+
+  # override drive
+  [[ -n ${DRIVE_OVERRIDE} ]] && DRIVE=${DRIVE_OVERRIDE}
+
+  if [[ ! -b ${DRIVE} ]] ; then
     error "No valid drive found"
   fi
 
