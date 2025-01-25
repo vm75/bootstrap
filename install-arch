@@ -50,9 +50,9 @@ setup_mirrors() {
 
 parition_drive() {
   # confirm install to drive
-  read -p "${DRIVE} will be wiped. Continue? (y/n) " -n 1 -r
+  read -p "${DRIVE} will be wiped. Continue? (y/n) " -n 1 -r < /dev/tty
   echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]] ; then
+  if [[ ! ${REPLY} =~ ^[Yy]$ ]] ; then
     exit 1
   fi
 
@@ -149,6 +149,8 @@ setup_bridge() {
     sudo nmcli con mod br0 ipv4.addresses "${ip}" ipv4.dhcp-hostname ${HOSTNAME%%.*} ipv4.ignore-auto-routes no ipv4.ignore-auto-dns no ipv4.method auto
   fi
   sudo nmcli con mod br0 ipv6.method ignore
+
+  echo "Bring up interface: br0"
   sudo nmcli con up br0
 
   echo "Bring up interface: ${interface}-slave"
@@ -191,7 +193,7 @@ mount_data_drive() {
     checkError "partitioning ${DATA_DRIVE}"
     if [[ -b ${DATA_DRIVE}1 ]] ; then
       DATA_PART=${DATA_DRIVE}1
-    elif [[ -b ${DATA_DRIVE}p1 && -b ${DATA_DRIVE}p2 ]] ; then
+    elif [[ -b ${DATA_DRIVE}p1 ]] ; then
       DATA_PART=${DATA_DRIVE}p1
     else
       error "Error detecting partitions"
@@ -203,7 +205,7 @@ mount_data_drive() {
   else
     if [[ -b ${DATA_DRIVE}1 ]] ; then
       DATA_PART=${DATA_DRIVE}1
-    elif [[ -b ${DATA_DRIVE}p1 && -b ${DATA_DRIVE}p2 ]] ; then
+    elif [[ -b ${DATA_DRIVE}p1 ]] ; then
       DATA_PART=${DATA_DRIVE}p1
     fi
   fi
@@ -216,9 +218,11 @@ mount_data_drive() {
   checkError "mounting data drive"
 
   echo "Creating subvolumes: /@home,/@vms,/@library..."
-  btrfs subv create ${DATA_DIR}/@home
-  btrfs subv create ${DATA_DIR}/@vms
-  btrfs subv create ${DATA_DIR}/@library
+  for subvol in @home @vms @library ; do
+    if [[ ! -d ${DATA_DIR}/${subvol} ]] ; then
+      btrfs subv create ${DATA_DIR}/${subvol}
+    fi
+  done
 }
 
 setup_data_drive() {
@@ -226,7 +230,7 @@ setup_data_drive() {
 
   uuid=$(blkid ${DATA_PART} -o value -s UUID)
   echo "Setting up fstab for data drive..."
-  for vol in $(btrfs subv list ${DATA_DIR} | awk '{print $9}') ; do
+  for vol in @home @vms @library ; do
     # if vol start with @
     if [[ "${vol}" == "@"* ]] ; then
       if [[ "${vol}" == "@home" ]] ; then
@@ -284,18 +288,22 @@ arch_install() {
   echo "Copying user files..."
   USER_HOME=${MOUNT_DIR}/home/${USERNAME}
   if [[ -d ${USER_FILES} ]] ; then
+    echo "Copying user files: ${USER_FILES} -> ${USER_HOME}"
     cp -ar "${USER_FILES}/." ${USER_HOME}
   elif $(file "${USER_FILES}" | grep -q compressed) ; then
+    echo "Unpacking user files: ${USER_FILES} -> ${USER_HOME}"
     cd ${USER_HOME}
-    tar xf "${USER_FILES}"
+    tar xvf "${USER_FILES}"
     cd -
   elif [[ -f ${USER_FILES} ]] ; then
+    echo "Copying user file: ${USER_FILES} -> ${USER_HOME}"
     cp -a "${USER_FILES}" ${USER_HOME}
   fi
 
   # ssh key
   echo "Setting up ssh..."
   if [[ -n ${SSH_KEY} ]] ; then
+    echo "Copying ssh key: ${SSH_KEY} -> ${USER_HOME}/.ssh/authorized_keys"
     mkdir -p ${USER_HOME}/.ssh
     echo "${SSH_KEY}" >> ${USER_HOME}/.ssh/authorized_keys
   fi
@@ -324,7 +332,7 @@ arch_install() {
     setup_bridge
     setup_wifi
     mkdir -p ${MOUNT_DIR}/etc/NetworkManager/system-connections
-    cp /etc/NetworkManager/system-connections/* ${MOUNT_DIR}/etc/NetworkManager/system-connections/
+    cp -a /etc/NetworkManager/system-connections/* ${MOUNT_DIR}/etc/NetworkManager/system-connections/
   fi
 
   # data-drive
@@ -339,14 +347,11 @@ install_yay() {
   sudo gpg --keyserver keyserver.ubuntu.com --recv-keys 5C4A26CD4CC8C397
 
   mkdir -p .aur
-  cd .aur
 
   echo "Installing yay..."
-  git clone https://aur.archlinux.org/yay.git
-  cd yay
-  makepkg -si --noconfirm
+  git clone https://aur.archlinux.org/yay.git .aur/yay
+  makepkg -D .aur/yay -si --noconfirm
   checkError "installing yay"
-  cd ~
 }
 
 post_install() {
@@ -358,17 +363,8 @@ post_install() {
 
   sudo chown -R ${USER}:${USER} ${HOME}
 
-  # crontab (for user)
-  echo "Enabling crontab for user ${USER}"
-  systemctl enable cronie
-
-  # sshd
-  echo "Enabling sshd"
-  sudo systemctl enable sshd.service
-
-  install_yay
-
   # install aur apps
+  install_yay
   echo "Installing aur apps: cpulimit, ntfsprogs-ntfs3..."
   yay -Sy --needed --noconfirm cpulimit ntfsprogs-ntfs3 rc-local # udevil
 
@@ -381,23 +377,23 @@ post_install() {
   echo "Adding group wheel and audio to user ${USER}"
   sudo usermod -aG wheel,audio ${USER}
 
-  # aur services
-  echo "Enabling rc-local service for user ${USER}"
-  systemctl --user enable rc-local.service
+  # basic services
+  echo "Enabling cronie, sshd and rc-local service"
+  sudo systemctl enable cronie.service sshd.service rc-local.service
 
-  # packages
+  # additional packages
   if [[ -n ${PACKAGES} ]] ; then
     echo "Installing additional packages: ${PACKAGES}"
     yay -Sy --needed --noconfirm ${PACKAGES}
   fi
 
-  # services
+  # additional services
   if [[ -n ${SERVICES} ]] ; then
     echo "Enabling additional services: ${SERVICES}"
     sudo systemctl enable ${SERVICES}
   fi
 
-  # user services
+  # additional user services
   if [[ -n ${USER_SERVICES} ]] ; then
     echo "Enabling additional user services: ${USER_SERVICES}"
     systemctl --user enable ${USER_SERVICES}
@@ -422,6 +418,7 @@ post_install() {
 main() {
   if [[ $1 == --post-install ]] ; then
     post_install
+    return
   fi
 
   echo "Mounting CIDATA..."
@@ -431,11 +428,12 @@ main() {
   checkError "mounting CIDATA"
 
   install_configs=(${CIDATA_DIR}/archinstall.*.conf)
-  echo "Select an install config to use:"
+  echo "Available install configs:"
+  echo "0) Use defaults"
   for i in "${!install_configs[@]}"; do
     echo "$((i + 1))) ${install_configs[i]}"
   done
-  read -p "Enter the number of the config to use (0 to continue with defaults): " choice
+  read -p "Enter the number of the config to use (0 to continue with defaults): " choice < /dev/tty
   if ! [[ ${choice} =~ ^[0-9]+$ ]] || [[ ${choice} -lt 0 ]] || [[ ${choice} -gt ${#install_configs[@]} ]]; then
     echo "Invalid selection. Exiting."
     exit 1
