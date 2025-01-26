@@ -9,6 +9,15 @@ HOSTNAME=arch
 USERNAME=admin
 PASSWORD=admin
 
+ALLOW_POLKIT=$(cat << EOF
+polkit.addRule(function(action, subject) {
+    if (subject.user == "USERNAME") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+)
+
 error() {
   local msg=${1}
   echo -e "\e[31m${SCRIPTNAME}: $1\e[0m"
@@ -170,7 +179,7 @@ setup_wifi() {
   sudo nmcli con mod ${interface} wifi-sec.key-mgmt wpa-psk wifi-sec.psk "${psk}"
 
   if [[ -n "${WIFI_IP}" ]]; then
-    sudo nmcli con mod ${interface} ipv4.addresses "${WIFI_IP}"
+    sudo nmcli con mod ${interface} ipv4.addresses "${WIFI_IP}" ipv4.dhcp-hostname ${HOSTNAME%%.*}-wl ipv4.ignore-auto-routes no ipv4.ignore-auto-dns no ipv4.method auto
   fi
 
   echo "Bring up interface: ${interface}"
@@ -314,6 +323,10 @@ arch_install() {
     chmod 600 ${USER_HOME}/.ssh/*
   fi
 
+  # disable polkit for user
+  echo "Disabling polkit for ${USERNAME}"
+  echo "${ALLOW_POLKIT}" | sed -e "s/USERNAME/${USERNAME}/g" > ${MOUNT_DIR}/etc/polkit-1/rules.d/99-enable-${USERNAME}.rules
+
   if [[ -n ${SKIP_POST_INSTALL} ]] ; then
     return
   fi
@@ -333,6 +346,8 @@ arch_install() {
     setup_wifi
     mkdir -p ${MOUNT_DIR}/etc/NetworkManager/system-connections
     cp -a /etc/NetworkManager/system-connections/* ${MOUNT_DIR}/etc/NetworkManager/system-connections/
+
+    echo -e "\n[device]\nwifi.scan-rand-mac-address=no" >> ${MOUNT_DIR}/etc/NetworkManager/NetworkManager.conf
   fi
 
   # data-drive
