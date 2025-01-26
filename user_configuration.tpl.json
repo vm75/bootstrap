@@ -145,6 +145,7 @@
         "man-db",
         "man",
         "networkmanager",
+        "nmap",
         "ninja",
         "nfs-utils",
         "openresolv",
